@@ -1,0 +1,8 @@
+uploads = []
+outputs = []
+
+[[generated]]
+id = "b307WDf2oYI8jrMGsSmEX"
+uri = "file://artifacts/vox-ai/assets/images/icon.png"
+type = "image"
+title = "generated_image"

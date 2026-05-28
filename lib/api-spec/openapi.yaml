@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: vox
+    description: VOX AI assistant operations
 paths:
   /healthz:
     get:
@@ -24,6 +26,76 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /vox/chat:
+    post:
+      operationId: voxChat
+      tags: [vox]
+      summary: Chat with VOX AI (streaming SSE)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VoxChatRequest"
+      responses:
+        "200":
+          description: SSE stream of AI response chunks
+          content:
+            text/event-stream: {}
+        "503":
+          description: API key not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VoxError"
+  /vox/transcribe:
+    post:
+      operationId: voxTranscribe
+      tags: [vox]
+      summary: Transcribe audio to text
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VoxTranscribeRequest"
+      responses:
+        "200":
+          description: Transcription result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VoxTranscribeResponse"
+        "503":
+          description: API key not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VoxError"
+  /vox/speak:
+    post:
+      operationId: voxSpeak
+      tags: [vox]
+      summary: Convert text to speech
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VoxSpeakRequest"
+      responses:
+        "200":
+          description: Base64-encoded audio
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VoxSpeakResponse"
+        "503":
+          description: API key not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VoxError"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +105,66 @@ components:
           type: string
       required:
         - status
-
+    VoxChatRequest:
+      type: object
+      properties:
+        messages:
+          type: array
+          items:
+            type: object
+            properties:
+              role:
+                type: string
+              content:
+                type: string
+            required:
+              - role
+              - content
+      required:
+        - messages
+    VoxTranscribeRequest:
+      type: object
+      properties:
+        audio:
+          type: string
+          description: Base64-encoded audio data
+        format:
+          type: string
+          description: Audio format (m4a, wav, mp3, etc.)
+      required:
+        - audio
+    VoxTranscribeResponse:
+      type: object
+      properties:
+        text:
+          type: string
+      required:
+        - text
+    VoxSpeakRequest:
+      type: object
+      properties:
+        text:
+          type: string
+        voice:
+          type: string
+          description: "Voice ID: alloy, echo, fable, onyx, nova, shimmer"
+      required:
+        - text
+    VoxSpeakResponse:
+      type: object
+      properties:
+        audio:
+          type: string
+          description: Base64-encoded audio
+        format:
+          type: string
+      required:
+        - audio
+        - format
+    VoxError:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
