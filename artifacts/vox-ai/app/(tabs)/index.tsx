@@ -1,5 +1,6 @@
 import React, { useCallback, useRef, useState } from "react";
 import {
+  Animated as RNAnimated,
   Dimensions,
   FlatList,
   Platform,
@@ -21,6 +22,7 @@ import { useKeepAwake } from "expo-keep-awake";
 import { useAssistant } from "@/context/AssistantContext";
 import { useAIStream } from "@/hooks/useAIStream";
 import { useVoice } from "@/hooks/useVoice";
+import { useAppLifecycle } from "@/hooks/useAppLifecycle";
 import { useColors } from "@/hooks/useColors";
 import { VoxOrb } from "@/components/VoxOrb";
 import { Waveform } from "@/components/Waveform";
@@ -45,6 +47,28 @@ export default function ChatScreen() {
 
   // Keep screen awake during active voice interaction
   useKeepAwake();
+
+  // Session recovery banner (shows briefly on resume from background)
+  const [showResumeBanner, setShowResumeBanner] = useState(false);
+  const resumeBannerOpacity = useRef(new RNAnimated.Value(0)).current;
+
+  const showRecoveryBanner = useCallback(() => {
+    setShowResumeBanner(true);
+    RNAnimated.sequence([
+      RNAnimated.timing(resumeBannerOpacity, { toValue: 1, duration: 300, useNativeDriver: true }),
+      RNAnimated.delay(1800),
+      RNAnimated.timing(resumeBannerOpacity, { toValue: 0, duration: 400, useNativeDriver: true }),
+    ]).start(() => setShowResumeBanner(false));
+  }, [resumeBannerOpacity]);
+
+  useAppLifecycle({
+    onForeground: useCallback((backgroundDurationMs: number) => {
+      // Show recovery banner only if we were away for at least 10 seconds
+      if (backgroundDurationMs > 10_000) {
+        showRecoveryBanner();
+      }
+    }, [showRecoveryBanner]),
+  });
 
   const handleSend = async () => {
     const text = inputText.trim();
@@ -105,6 +129,14 @@ export default function ChatScreen() {
 
       {showStartup && (
         <StartupAnimation onComplete={() => setShowStartup(false)} />
+      )}
+
+      {/* Session recovery banner — appears briefly when resuming from background */}
+      {showResumeBanner && (
+        <RNAnimated.View style={[styles.resumeBanner, { opacity: resumeBannerOpacity }]}>
+          <View style={styles.resumeBannerDot} />
+          <Text style={styles.resumeBannerText}>SYSTEM ONLINE</Text>
+        </RNAnimated.View>
       )}
 
       {/* Header */}
@@ -276,6 +308,35 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: "#000000",
+  },
+
+  // Session recovery banner
+  resumeBanner: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 100,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 7,
+    backgroundColor: "#001A20",
+    borderBottomWidth: 1,
+    borderBottomColor: "#00FFCC33",
+  },
+  resumeBannerDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: "#00FFCC",
+  },
+  resumeBannerText: {
+    fontSize: 9,
+    fontFamily: "Inter_600SemiBold",
+    color: "#00FFCC",
+    letterSpacing: 4,
   },
   header: {
     flexDirection: "row",

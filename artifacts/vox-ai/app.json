@@ -36,8 +36,12 @@
         "FOREGROUND_SERVICE_MICROPHONE",
         "WAKE_LOCK",
         "RECEIVE_BOOT_COMPLETED",
-        "REQUEST_INSTALL_PACKAGES"
-      ]
+        "REQUEST_INSTALL_PACKAGES",
+        "POST_NOTIFICATIONS",
+        "USE_FULL_SCREEN_INTENT"
+      ],
+      "softwareKeyboardLayoutMode": "pan",
+      "allowBackup": false
     },
     "web": {
       "favicon": "./assets/images/icon.png"

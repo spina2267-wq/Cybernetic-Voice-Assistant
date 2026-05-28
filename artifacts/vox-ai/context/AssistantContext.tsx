@@ -7,7 +7,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { AppState, AppStateStatus } from "react-native";
+import { useAppLifecycle } from "@/hooks/useAppLifecycle";
 
 export type AssistantStatus =
   | "idle"
@@ -41,16 +41,22 @@ const AssistantContext = createContext<AssistantContextType | null>(null);
 const MESSAGES_KEY = "@vox_messages_v2";
 const SETTINGS_KEY = "@vox_settings_v2";
 const MAX_MESSAGES = 100;
+// Time after which a "stuck" status is considered stale (ms)
+const STALE_STATUS_MS = 45_000;
 
 export function AssistantProvider({ children }: { children: React.ReactNode }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [status, setStatusState] = useState<AssistantStatus>("idle");
   const [ttsEnabled, setTtsEnabledState] = useState(true);
   const [selectedVoice, setSelectedVoiceState] = useState("alloy");
+
+  // Refs for use inside callbacks/effects without stale closures
   const statusRef = useRef<AssistantStatus>("idle");
+  const statusChangedAtRef = useRef<number>(Date.now());
 
   const setStatus = useCallback((s: AssistantStatus) => {
     statusRef.current = s;
+    statusChangedAtRef.current = Date.now();
     setStatusState(s);
   }, []);
 
@@ -62,33 +68,52 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
           AsyncStorage.getItem(MESSAGES_KEY),
           AsyncStorage.getItem(SETTINGS_KEY),
         ]);
-        if (savedMsgs) setMessages(JSON.parse(savedMsgs).slice(0, MAX_MESSAGES));
+        if (savedMsgs) {
+          setMessages(JSON.parse(savedMsgs).slice(0, MAX_MESSAGES));
+        }
         if (savedSettings) {
           const s = JSON.parse(savedSettings);
           if (s.ttsEnabled !== undefined) setTtsEnabledState(s.ttsEnabled);
           if (s.selectedVoice) setSelectedVoiceState(s.selectedVoice);
         }
       } catch {
-        // Ignore storage errors
+        // Ignore storage errors — non-fatal
       }
     })();
   }, []);
 
-  // Handle app going to background — reset active states to prevent stuck UI
-  useEffect(() => {
-    const handleAppStateChange = (nextState: AppStateStatus) => {
-      if (nextState === "background" || nextState === "inactive") {
-        if (statusRef.current === "listening" || statusRef.current === "thinking") {
-          setStatus("idle");
-        }
+  // Lifecycle: reset stale states on foreground, clean up on background
+  useAppLifecycle({
+    onBackground: useCallback(() => {
+      const current = statusRef.current;
+      if (current === "listening" || current === "thinking") {
+        setStatus("idle");
       }
-    };
-    const sub = AppState.addEventListener("change", handleAppStateChange);
-    return () => sub.remove();
-  }, [setStatus]);
+    }, [setStatus]),
+
+    onForeground: useCallback((backgroundDurationMs: number) => {
+      const current = statusRef.current;
+      const staleMs = Date.now() - statusChangedAtRef.current;
+
+      // Reset if stuck in an active state for too long
+      const isStuck =
+        (current === "thinking" || current === "listening" || current === "speaking") &&
+        staleMs > STALE_STATUS_MS;
+
+      // Also reset if we were away for more than 5 minutes
+      const longAbsence = backgroundDurationMs > 5 * 60 * 1000;
+
+      if (isStuck || (longAbsence && current !== "idle")) {
+        setStatus("idle");
+      }
+    }, [setStatus]),
+  });
 
   const persistMessages = useCallback((msgs: Message[]) => {
-    AsyncStorage.setItem(MESSAGES_KEY, JSON.stringify(msgs.slice(0, MAX_MESSAGES))).catch(() => {});
+    AsyncStorage.setItem(
+      MESSAGES_KEY,
+      JSON.stringify(msgs.slice(0, MAX_MESSAGES))
+    ).catch(() => {});
   }, []);
 
   const addMessage = useCallback(
@@ -119,8 +144,10 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
   const setTtsEnabled = useCallback(
     (enabled: boolean) => {
       setTtsEnabledState(enabled);
-      const s = { ttsEnabled: enabled, selectedVoice };
-      AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(s)).catch(() => {});
+      AsyncStorage.setItem(
+        SETTINGS_KEY,
+        JSON.stringify({ ttsEnabled: enabled, selectedVoice })
+      ).catch(() => {});
     },
     [selectedVoice]
   );
@@ -128,8 +155,10 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
   const setSelectedVoice = useCallback(
     (voice: string) => {
       setSelectedVoiceState(voice);
-      const s = { ttsEnabled, selectedVoice: voice };
-      AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(s)).catch(() => {});
+      AsyncStorage.setItem(
+        SETTINGS_KEY,
+        JSON.stringify({ ttsEnabled, selectedVoice: voice })
+      ).catch(() => {});
     },
     [ttsEnabled]
   );
