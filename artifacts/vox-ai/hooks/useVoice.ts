@@ -1,7 +1,27 @@
-import * as FileSystem from "expo-file-system";
+import * as _FileSystem from "expo-file-system";
 import { Audio } from "expo-av";
+import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { useEffect, useRef, useState } from "react";
 import { Alert, AppState, AppStateStatus, Platform } from "react-native";
+
+// expo-file-system v19 type workaround: legacy API still works at runtime
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const FS = _FileSystem as any;
+const EncodingType = FS.EncodingType as { Base64: "base64"; UTF8: "utf8" };
+const documentDirectory = FS.documentDirectory as string | null;
+const readAsStringAsync = FS.readAsStringAsync as (
+  uri: string,
+  options?: { encoding: string }
+) => Promise<string>;
+const writeAsStringAsync = FS.writeAsStringAsync as (
+  uri: string,
+  contents: string,
+  options?: { encoding: string }
+) => Promise<void>;
+const deleteAsync = FS.deleteAsync as (
+  uri: string,
+  options?: { idempotent?: boolean }
+) => Promise<void>;
 
 const getApiBase = () => `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`;
 
@@ -97,6 +117,9 @@ export function useVoice() {
       recordingRef.current = recording;
       setIsRecording(true);
 
+      // Keep screen on while mic is active
+      activateKeepAwakeAsync("vox-recording").catch(() => {});
+
       // Auto-stop after MAX_RECORDING_MS to prevent stuck mic
       clearRecordingTimer();
       recordingTimerRef.current = setTimeout(() => {
@@ -114,6 +137,7 @@ export function useVoice() {
 
   const stopRecording = async (): Promise<string | null> => {
     clearRecordingTimer();
+    deactivateKeepAwake("vox-recording");
 
     try {
       if (!recordingRef.current) return null;
@@ -130,8 +154,8 @@ export function useVoice() {
         playsInSilentModeIOS: true,
       });
 
-      const base64 = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64,
+      const base64 = await readAsStringAsync(uri, {
+        encoding: EncodingType.Base64,
       });
       const ext = uri.split(".").pop() ?? "m4a";
 
@@ -190,10 +214,10 @@ export function useVoice() {
 
       const { audio, format } = await res.json();
       const tempUri =
-        (FileSystem.documentDirectory ?? "") + `tts_${Date.now()}.${format}`;
+        (documentDirectory ?? "") + `tts_${Date.now()}.${format}`;
 
-      await FileSystem.writeAsStringAsync(tempUri, audio, {
-        encoding: FileSystem.EncodingType.Base64,
+      await writeAsStringAsync(tempUri, audio, {
+        encoding: EncodingType.Base64,
       });
 
       await Audio.setAudioModeAsync({
@@ -214,7 +238,7 @@ export function useVoice() {
 
       await sound.unloadAsync().catch(() => {});
       soundRef.current = null;
-      await FileSystem.deleteAsync(tempUri, { idempotent: true }).catch(() => {});
+      await deleteAsync(tempUri, { idempotent: true }).catch(() => {});
     } catch {
       // TTS failure is non-fatal — text is still visible in chat
     } finally {

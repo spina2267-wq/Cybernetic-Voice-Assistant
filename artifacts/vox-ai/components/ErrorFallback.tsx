@@ -1,4 +1,4 @@
-import { Feather } from "@expo/vector-icons";
+import { Ionicons } from "@expo/vector-icons";
 import { reloadAppAsync } from "expo";
 import React, { useState } from "react";
 import {
@@ -11,35 +11,43 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-
-import { useColors } from "@/hooks/useColors";
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withSequence,
+  withTiming,
+} from "react-native-reanimated";
+import { useEffect } from "react";
 
 export type ErrorFallbackProps = {
   error: Error;
   resetError: () => void;
 };
 
-export function ErrorFallback({ error, resetError }: ErrorFallbackProps) {
-  const colors = useColors();
-  const insets = useSafeAreaInsets();
+function BlinkingDot() {
+  const opacity = useSharedValue(1);
+  useEffect(() => {
+    opacity.value = withRepeat(
+      withSequence(withTiming(0.1, { duration: 600 }), withTiming(1, { duration: 600 })),
+      -1,
+      false
+    );
+  }, []);
+  const style = useAnimatedStyle(() => ({ opacity: opacity.value }));
+  return <Animated.View style={[styles.dot, style]} />;
+}
 
-  const [isModalVisible, setIsModalVisible] = useState(false);
+export function ErrorFallback({ error, resetError }: ErrorFallbackProps) {
+  const insets = useSafeAreaInsets();
+  const [showDetails, setShowDetails] = useState(false);
 
   const handleRestart = async () => {
     try {
       await reloadAppAsync();
-    } catch (restartError) {
-      console.error("Failed to restart app:", restartError);
+    } catch {
       resetError();
     }
-  };
-
-  const formatErrorDetails = (): string => {
-    let details = `Error: ${error.message}\n\n`;
-    if (error.stack) {
-      details += `Stack Trace:\n${error.stack}`;
-    }
-    return details;
   };
 
   const monoFont = Platform.select({
@@ -48,231 +56,283 @@ export function ErrorFallback({ error, resetError }: ErrorFallbackProps) {
     default: "monospace",
   });
 
+  const errorCode = `ERR_${Date.now().toString(36).toUpperCase().slice(-6)}`;
+
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {__DEV__ ? (
-        <Pressable
-          onPress={() => setIsModalVisible(true)}
-          accessibilityLabel="View error details"
-          accessibilityRole="button"
-          style={({ pressed }) => [
-            styles.topButton,
-            {
-              top: insets.top + 16,
-              backgroundColor: colors.card,
-              opacity: pressed ? 0.8 : 1,
-            },
-          ]}
-        >
-          <Feather name="alert-circle" size={20} color={colors.foreground} />
-        </Pressable>
-      ) : null}
+    <View style={[styles.root, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 24 }]}>
+      {/* Background scanline effect */}
+      <View style={styles.scanOverlay} pointerEvents="none" />
 
-      <View style={styles.content}>
-        <Text style={[styles.title, { color: colors.foreground }]}>
-          Something went wrong
-        </Text>
-
-        <Text style={[styles.message, { color: colors.mutedForeground }]}>
-          Please reload the app to continue.
-        </Text>
-
-        <Pressable
-          onPress={handleRestart}
-          style={({ pressed }) => [
-            styles.button,
-            {
-              backgroundColor: colors.primary,
-              opacity: pressed ? 0.9 : 1,
-              transform: [{ scale: pressed ? 0.98 : 1 }],
-            },
-          ]}
-        >
-          <Text
-            style={[
-              styles.buttonText,
-              { color: colors.primaryForeground },
-            ]}
-          >
-            Try Again
-          </Text>
-        </Pressable>
+      {/* Header */}
+      <View style={styles.header}>
+        <BlinkingDot />
+        <Text style={styles.headerLabel}>SYSTEM ALERT</Text>
+        <BlinkingDot />
       </View>
 
-      {__DEV__ ? (
+      {/* Main content */}
+      <View style={styles.content}>
+        {/* Error icon */}
+        <View style={styles.iconWrap}>
+          <Ionicons name="warning-outline" size={36} color="#FF2D55" />
+        </View>
+
+        {/* Title */}
+        <Text style={styles.title}>CRITICAL ERROR</Text>
+        <Text style={styles.subtitle}>VOX AI — SYSTEM FAULT DETECTED</Text>
+
+        {/* Divider */}
+        <View style={styles.divider} />
+
+        {/* Error brief */}
+        <View style={styles.errorCard}>
+          <Text style={styles.errorCode}>{errorCode}</Text>
+          <Text style={styles.errorMessage} numberOfLines={3}>
+            {error.message || "Unknown system error"}
+          </Text>
+        </View>
+
+        {/* Action buttons */}
+        <Pressable
+          onPress={handleRestart}
+          style={({ pressed }) => [styles.primaryBtn, pressed && styles.primaryBtnPressed]}
+        >
+          <Ionicons name="refresh" size={16} color="#000000" style={{ marginRight: 8 }} />
+          <Text style={styles.primaryBtnText}>REINITIALIZE SYSTEM</Text>
+        </Pressable>
+
+        <Pressable
+          onPress={resetError}
+          style={({ pressed }) => [styles.secondaryBtn, pressed && styles.secondaryBtnPressed]}
+        >
+          <Text style={styles.secondaryBtnText}>ATTEMPT RECOVERY</Text>
+        </Pressable>
+
+        {/* Dev details */}
+        {__DEV__ && (
+          <Pressable onPress={() => setShowDetails(true)} style={styles.detailsLink}>
+            <Text style={styles.detailsLinkText}>VIEW DIAGNOSTIC REPORT</Text>
+          </Pressable>
+        )}
+      </View>
+
+      {/* Footer */}
+      <Text style={styles.footer}>VOX AI  •  ADVANCED INTELLIGENCE SYSTEM</Text>
+
+      {/* Dev modal */}
+      {__DEV__ && (
         <Modal
-          visible={isModalVisible}
+          visible={showDetails}
           animationType="slide"
-          transparent={true}
-          onRequestClose={() => setIsModalVisible(false)}
+          transparent
+          onRequestClose={() => setShowDetails(false)}
         >
           <View style={styles.modalOverlay}>
-            <View
-              style={[
-                styles.modalContainer,
-                { backgroundColor: colors.background },
-              ]}
-            >
-              <View
-                style={[
-                  styles.modalHeader,
-                  { borderBottomColor: colors.border },
-                ]}
-              >
-                <Text style={[styles.modalTitle, { color: colors.foreground }]}>
-                  Error Details
-                </Text>
-                <Pressable
-                  onPress={() => setIsModalVisible(false)}
-                  accessibilityLabel="Close error details"
-                  accessibilityRole="button"
-                  style={({ pressed }) => [
-                    styles.closeButton,
-                    { opacity: pressed ? 0.6 : 1 },
-                  ]}
-                >
-                  <Feather name="x" size={24} color={colors.foreground} />
+            <View style={styles.modalContainer}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>DIAGNOSTIC REPORT</Text>
+                <Pressable onPress={() => setShowDetails(false)} style={styles.closeBtn}>
+                  <Ionicons name="close" size={22} color="#00D4FF" />
                 </Pressable>
               </View>
-
               <ScrollView
-                style={styles.modalScrollView}
-                contentContainerStyle={[
-                  styles.modalScrollContent,
-                  { paddingBottom: insets.bottom + 16 },
-                ]}
+                style={styles.modalScroll}
+                contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 24 }}
                 showsVerticalScrollIndicator
               >
-                <View
-                  style={[
-                    styles.errorContainer,
-                    { backgroundColor: colors.card },
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.errorText,
-                      {
-                        color: colors.foreground,
-                        fontFamily: monoFont,
-                      },
-                    ]}
-                    selectable
-                  >
-                    {formatErrorDetails()}
-                  </Text>
-                </View>
+                <Text style={[styles.stackTrace, { fontFamily: monoFont }]} selectable>
+                  {`Error: ${error.message}\n\n${error.stack ?? "No stack trace"}`}
+                </Text>
               </ScrollView>
             </View>
           </View>
         </Modal>
-      ) : null}
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  root: {
     flex: 1,
-    width: "100%",
-    height: "100%",
-    justifyContent: "center",
+    backgroundColor: "#000000",
     alignItems: "center",
-    padding: 24,
+    justifyContent: "space-between",
+    paddingHorizontal: 24,
+  },
+  scanOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderColor: "#FF2D5511",
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginBottom: 8,
+  },
+  headerLabel: {
+    fontSize: 10,
+    fontFamily: "Inter_600SemiBold",
+    color: "#FF2D55",
+    letterSpacing: 5,
+  },
+  dot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: "#FF2D55",
   },
   content: {
+    flex: 1,
     alignItems: "center",
     justifyContent: "center",
     gap: 16,
     width: "100%",
-    maxWidth: 600,
+    maxWidth: 400,
+  },
+  iconWrap: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    borderWidth: 1.5,
+    borderColor: "#FF2D5566",
+    backgroundColor: "#1A0008",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 4,
   },
   title: {
-    fontSize: 28,
-    fontWeight: "700",
+    fontSize: 26,
+    fontFamily: "Inter_700Bold",
+    color: "#FF2D55",
+    letterSpacing: 6,
     textAlign: "center",
-    lineHeight: 40,
   },
-  message: {
-    fontSize: 16,
+  subtitle: {
+    fontSize: 9,
+    fontFamily: "Inter_500Medium",
+    color: "#5A1020",
+    letterSpacing: 3,
     textAlign: "center",
-    lineHeight: 24,
+    marginTop: -8,
   },
-  topButton: {
-    position: "absolute",
-    right: 16,
-    width: 44,
-    height: 44,
-    borderRadius: 8,
+  divider: {
+    height: 1,
+    width: "80%",
+    backgroundColor: "#330010",
+  },
+  errorCard: {
+    width: "100%",
+    backgroundColor: "#0D0004",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#FF2D5522",
+    padding: 16,
+    gap: 6,
+  },
+  errorCode: {
+    fontSize: 9,
+    fontFamily: "Inter_600SemiBold",
+    color: "#FF2D5566",
+    letterSpacing: 3,
+  },
+  errorMessage: {
+    fontSize: 13,
+    fontFamily: "Inter_400Regular",
+    color: "#C08090",
+    lineHeight: 20,
+  },
+  primaryBtn: {
+    width: "100%",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    zIndex: 10,
-  },
-  button: {
-    paddingVertical: 16,
-    borderRadius: 8,
+    backgroundColor: "#FF2D55",
+    borderRadius: 14,
+    paddingVertical: 14,
     paddingHorizontal: 24,
-    minWidth: 200,
-    shadowColor: "#000",
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    marginTop: 4,
   },
-  buttonText: {
-    fontWeight: "600",
-    textAlign: "center",
-    fontSize: 16,
+  primaryBtnPressed: {
+    backgroundColor: "#CC2244",
+    transform: [{ scale: 0.98 }],
+  },
+  primaryBtnText: {
+    fontSize: 12,
+    fontFamily: "Inter_700Bold",
+    color: "#000000",
+    letterSpacing: 3,
+  },
+  secondaryBtn: {
+    width: "100%",
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#333333",
+    paddingVertical: 12,
+  },
+  secondaryBtnPressed: {
+    backgroundColor: "#111111",
+  },
+  secondaryBtnText: {
+    fontSize: 11,
+    fontFamily: "Inter_600SemiBold",
+    color: "#666666",
+    letterSpacing: 3,
+  },
+  detailsLink: {
+    paddingVertical: 8,
+  },
+  detailsLinkText: {
+    fontSize: 9,
+    fontFamily: "Inter_400Regular",
+    color: "#FF2D5555",
+    letterSpacing: 2,
+    textDecorationLine: "underline",
+  },
+  footer: {
+    fontSize: 9,
+    fontFamily: "Inter_400Regular",
+    color: "#1A0008",
+    letterSpacing: 3,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    backgroundColor: "rgba(0,0,0,0.85)",
     justifyContent: "flex-end",
   },
   modalContainer: {
-    width: "100%",
-    height: "90%",
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
+    backgroundColor: "#030006",
+    borderTopWidth: 1,
+    borderTopColor: "#FF2D5533",
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: "80%",
   },
   modalHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 12,
+    padding: 16,
     borderBottomWidth: 1,
+    borderBottomColor: "#1A0010",
   },
   modalTitle: {
-    fontSize: 20,
-    fontWeight: "600",
+    fontSize: 11,
+    fontFamily: "Inter_600SemiBold",
+    color: "#00D4FF",
+    letterSpacing: 3,
   },
-  closeButton: {
-    width: 44,
-    height: 44,
-    alignItems: "center",
-    justifyContent: "center",
+  closeBtn: {
+    padding: 4,
   },
-  modalScrollView: {
-    flex: 1,
-  },
-  modalScrollContent: {
-    padding: 16,
-  },
-  errorContainer: {
-    width: "100%",
-    borderRadius: 8,
-    overflow: "hidden",
-    padding: 16,
-  },
-  errorText: {
-    fontSize: 12,
+  modalScroll: { flex: 1 },
+  stackTrace: {
+    fontSize: 11,
+    color: "#FF2D5588",
     lineHeight: 18,
-    width: "100%",
   },
 });

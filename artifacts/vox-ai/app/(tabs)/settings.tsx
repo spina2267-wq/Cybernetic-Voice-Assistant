@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useCallback, useState } from "react";
 import {
   Alert,
   Platform,
@@ -13,6 +13,14 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+  withRepeat,
+  withSequence,
+} from "react-native-reanimated";
+import { useEffect } from "react";
 
 import { useAssistant } from "@/context/AssistantContext";
 import { useColors } from "@/hooks/useColors";
@@ -26,12 +34,45 @@ const VOICES = [
   { id: "shimmer", name: "Shimmer", desc: "Soft, breathy" },
 ];
 
+const API_BASE = () => `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`;
+
+type PingState = "idle" | "checking" | "ok" | "error";
+
+function PingDot({ state }: { state: PingState }) {
+  const opacity = useSharedValue(1);
+
+  useEffect(() => {
+    if (state === "checking") {
+      opacity.value = withRepeat(
+        withSequence(withTiming(0.2, { duration: 400 }), withTiming(1, { duration: 400 })),
+        -1,
+        false
+      );
+    } else {
+      opacity.value = withTiming(1, { duration: 200 });
+    }
+  }, [state]);
+
+  const style = useAnimatedStyle(() => ({ opacity: opacity.value }));
+
+  const color =
+    state === "ok" ? "#00FFCC"
+    : state === "error" ? "#FF2D55"
+    : state === "checking" ? "#0099FF"
+    : "#333333";
+
+  return <Animated.View style={[styles.pingDot, { backgroundColor: color }, style]} />;
+}
+
+interface PingResult {
+  latencyMs: number;
+  aiStatus: string;
+}
+
 function SectionHeader({ title }: { title: string }) {
   const colors = useColors();
   return (
-    <Text style={[styles.sectionHeader, { color: colors.mutedForeground }]}>
-      {title}
-    </Text>
+    <Text style={[styles.sectionHeader, { color: colors.mutedForeground }]}>{title}</Text>
   );
 }
 
@@ -50,9 +91,7 @@ function SettingRow({
       <View style={{ flex: 1 }}>
         <Text style={[styles.rowTitle, { color: colors.foreground }]}>{title}</Text>
         {subtitle && (
-          <Text style={[styles.rowSubtitle, { color: colors.mutedForeground }]}>
-            {subtitle}
-          </Text>
+          <Text style={[styles.rowSubtitle, { color: colors.mutedForeground }]}>{subtitle}</Text>
         )}
       </View>
       {right}
@@ -66,6 +105,37 @@ export default function SettingsScreen() {
   const { ttsEnabled, setTtsEnabled, selectedVoice, setSelectedVoice, clearHistory } =
     useAssistant();
   const topPad = insets.top + (Platform.OS === "web" ? 67 : 0);
+
+  const [pingState, setPingState] = useState<PingState>("idle");
+  const [pingResult, setPingResult] = useState<PingResult | null>(null);
+
+  const handleTestConnection = useCallback(async () => {
+    if (pingState === "checking") return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setPingState("checking");
+    setPingResult(null);
+
+    const start = Date.now();
+    try {
+      const res = await fetch(`${API_BASE()}/vox/health`, {
+        method: "GET",
+        headers: { "Cache-Control": "no-cache" },
+      });
+      const latencyMs = Date.now() - start;
+      if (res.ok) {
+        const data = await res.json();
+        setPingResult({ latencyMs, aiStatus: data.ai ?? "unknown" });
+        setPingState("ok");
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      } else {
+        setPingState("error");
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      }
+    } catch {
+      setPingState("error");
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    }
+  }, [pingState]);
 
   const handleClearHistory = () => {
     Alert.alert(
@@ -85,6 +155,24 @@ export default function SettingsScreen() {
     );
   };
 
+  const pingLabel =
+    pingState === "checking"
+      ? "CHECKING…"
+      : pingState === "ok"
+      ? `ONLINE  •  ${pingResult?.latencyMs}ms`
+      : pingState === "error"
+      ? "UNREACHABLE"
+      : "TEST CONNECTION";
+
+  const pingLabelColor =
+    pingState === "ok"
+      ? "#00FFCC"
+      : pingState === "error"
+      ? "#FF2D55"
+      : pingState === "checking"
+      ? "#0099FF"
+      : colors.mutedForeground;
+
   return (
     <View style={[styles.root, { backgroundColor: colors.background }]}>
       {/* Header */}
@@ -99,17 +187,13 @@ export default function SettingsScreen() {
       <ScrollView
         contentContainerStyle={[
           styles.content,
-          {
-            paddingBottom: insets.bottom + (Platform.OS === "web" ? 34 : 0) + 24,
-          },
+          { paddingBottom: insets.bottom + (Platform.OS === "web" ? 34 : 0) + 24 },
         ]}
         showsVerticalScrollIndicator={false}
       >
         {/* Voice Output */}
         <SectionHeader title="VOICE OUTPUT" />
-        <View
-          style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}
-        >
+        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <SettingRow
             title="Text-to-Speech"
             subtitle="VOX speaks responses aloud"
@@ -129,9 +213,7 @@ export default function SettingsScreen() {
 
         {/* Voice Selection */}
         <SectionHeader title="VOICE CHARACTER" />
-        <View
-          style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}
-        >
+        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
           {VOICES.map((v, i) => (
             <Pressable
               key={v.id}
@@ -141,13 +223,14 @@ export default function SettingsScreen() {
               }}
               style={[
                 styles.voiceRow,
-                i < VOICES.length - 1 && { borderBottomColor: colors.border, borderBottomWidth: 1 },
+                i < VOICES.length - 1 && {
+                  borderBottomColor: colors.border,
+                  borderBottomWidth: 1,
+                },
               ]}
             >
               <View style={{ flex: 1 }}>
-                <Text style={[styles.rowTitle, { color: colors.foreground }]}>
-                  {v.name}
-                </Text>
+                <Text style={[styles.rowTitle, { color: colors.foreground }]}>{v.name}</Text>
                 <Text style={[styles.rowSubtitle, { color: colors.mutedForeground }]}>
                   {v.desc}
                 </Text>
@@ -159,18 +242,53 @@ export default function SettingsScreen() {
           ))}
         </View>
 
-        {/* System */}
+        {/* System status */}
         <SectionHeader title="SYSTEM" />
-        <View
-          style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}
-        >
+        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          {/* Connection test */}
+          <Pressable
+            onPress={handleTestConnection}
+            style={[styles.row, { borderBottomColor: colors.border }]}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.rowTitle, { color: colors.foreground }]}>API Connection</Text>
+              <Text style={[styles.rowSubtitle, { color: pingLabelColor }]}>{pingLabel}</Text>
+            </View>
+            <PingDot state={pingState} />
+          </Pressable>
+
+          {/* AI status */}
+          {pingResult && (
+            <View style={[styles.row, { borderBottomColor: colors.border }]}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.rowTitle, { color: colors.foreground }]}>AI Engine</Text>
+                <Text style={[styles.rowSubtitle, { color: colors.mutedForeground }]}>
+                  {pingResult.aiStatus === "configured"
+                    ? "OpenAI — Active"
+                    : pingResult.aiStatus === "unconfigured"
+                    ? "Awaiting credentials (Replit AI credits)"
+                    : `Status: ${pingResult.aiStatus}`}
+                </Text>
+              </View>
+              <View
+                style={[
+                  styles.pingDot,
+                  {
+                    backgroundColor:
+                      pingResult.aiStatus === "configured" ? "#00FFCC" : "#FF2D5566",
+                  },
+                ]}
+              />
+            </View>
+          )}
+
           <SettingRow
-            title="AI Engine"
-            subtitle="OpenAI GPT (via API key or Replit credits)"
+            title="Voice Recognition"
+            subtitle="Whisper — server-side transcription"
           />
           <SettingRow
-            title="API Key"
-            subtitle="Set OPENAI_API_KEY in Replit Secrets"
+            title="Text-to-Speech"
+            subtitle="OpenAI TTS-1 — server-side synthesis"
           />
         </View>
 
@@ -253,6 +371,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: "Inter_400Regular",
     marginTop: 2,
+  },
+  pingDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginLeft: 8,
   },
   dangerBtn: {
     flexDirection: "row",
