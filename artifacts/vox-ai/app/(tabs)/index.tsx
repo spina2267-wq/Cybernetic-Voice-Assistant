@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useCallback, useRef, useState } from "react";
 import {
   Dimensions,
   FlatList,
@@ -16,6 +16,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import { useKeepAwake } from "expo-keep-awake";
 
 import { useAssistant } from "@/context/AssistantContext";
 import { useAIStream } from "@/hooks/useAIStream";
@@ -41,6 +42,9 @@ export default function ChatScreen() {
   const [showStartup, setShowStartup] = useState(true);
   const [isSending, setIsSending] = useState(false);
   const inputRef = useRef<TextInput>(null);
+
+  // Keep screen awake during active voice interaction
+  useKeepAwake();
 
   const handleSend = async () => {
     const text = inputText.trim();
@@ -71,6 +75,16 @@ export default function ChatScreen() {
       await startRecording();
     }
   };
+
+  const renderChatBubble = useCallback(
+    ({ item, index }: { item: { id: string; role: "user" | "assistant"; content: string; timestamp: number }; index: number }) => (
+      <ChatBubble
+        message={item}
+        isTyping={index === 0 && status === "thinking"}
+      />
+    ),
+    [status]
+  );
 
   const isEmpty = messages.length === 0;
   const topPad = insets.top + (Platform.OS === "web" ? 67 : 0);
@@ -162,17 +176,17 @@ export default function ChatScreen() {
           <FlatList
             data={messages}
             inverted
-            renderItem={({ item, index }) => (
-              <ChatBubble
-                message={item}
-                isTyping={index === 0 && status === "thinking"}
-              />
-            )}
+            renderItem={renderChatBubble}
             keyExtractor={(item) => item.id}
             contentContainerStyle={styles.messageList}
             keyboardDismissMode="interactive"
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
+            removeClippedSubviews={Platform.OS !== "web"}
+            maxToRenderPerBatch={8}
+            updateCellsBatchingPeriod={50}
+            windowSize={10}
+            initialNumToRender={12}
           />
         )}
 

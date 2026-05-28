@@ -1,4 +1,4 @@
-import React from "react";
+import React, { memo } from "react";
 import {
   Pressable,
   StyleSheet,
@@ -9,11 +9,11 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 
 const COMMANDS = [
-  { label: "What time is it?",   icon: "time-outline" as const,          color: "#00D4FF" },
-  { label: "Tell me a fact",     icon: "star-outline" as const,          color: "#00FFCC" },
-  { label: "Write something",    icon: "create-outline" as const,        color: "#00D4FF" },
-  { label: "Explain this",       icon: "bulb-outline" as const,          color: "#00FFCC" },
-  { label: "Summarize text",     icon: "list-outline" as const,          color: "#00D4FF" },
+  { label: "What time is it?",   icon: "time-outline" as const,           color: "#00D4FF" },
+  { label: "Tell me a fact",     icon: "star-outline" as const,           color: "#00FFCC" },
+  { label: "Write something",    icon: "create-outline" as const,         color: "#00D4FF" },
+  { label: "Explain this",       icon: "bulb-outline" as const,           color: "#00FFCC" },
+  { label: "Summarize text",     icon: "list-outline" as const,           color: "#00D4FF" },
   { label: "System status",      icon: "hardware-chip-outline" as const,  color: "#00FFCC" },
 ];
 
@@ -21,7 +21,7 @@ interface QuickCommandsProps {
   onCommand: (text: string) => void;
 }
 
-export function QuickCommands({ onCommand }: QuickCommandsProps) {
+export const QuickCommands = memo(function QuickCommands({ onCommand }: QuickCommandsProps) {
   return (
     <View style={styles.wrapper}>
       <Text style={styles.sectionLabel}>QUICK COMMANDS</Text>
@@ -49,7 +49,7 @@ export function QuickCommands({ onCommand }: QuickCommandsProps) {
       </View>
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   wrapper: {

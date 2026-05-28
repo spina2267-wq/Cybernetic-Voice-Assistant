@@ -26,9 +26,10 @@ A Jarvis-inspired AI voice assistant app (Expo mobile + API server) with streami
 - `lib/api-spec/openapi.yaml` — OpenAPI spec (source of truth)
 - `lib/api-client-react/` — generated React Query hooks
 - `lib/api-zod/` — generated Zod validators
-- `artifacts/vox-ai/context/AssistantContext.tsx` — conversation state + AsyncStorage
+- `artifacts/vox-ai/context/AssistantContext.tsx` — conversation state + AsyncStorage + AppState handler
 - `artifacts/vox-ai/hooks/useAIStream.ts` — streaming SSE chat hook
-- `artifacts/vox-ai/hooks/useVoice.ts` — STT recording + TTS playback
+- `artifacts/vox-ai/hooks/useVoice.ts` — STT recording + TTS playback + AppState cleanup
+- `artifacts/vox-ai/constants/colors.ts` — light + dark cyberpunk theme tokens
 
 ## Architecture decisions
 
@@ -36,7 +37,7 @@ A Jarvis-inspired AI voice assistant app (Expo mobile + API server) with streami
 - Streaming chat via SSE (text/event-stream) for real-time token display
 - Voice recording uses `expo-av` → base64 → server-side Whisper transcription
 - TTS: server-side OpenAI TTS → base64 MP3 → expo-av playback
-- Conversation memory stored in AsyncStorage (up to 30 messages of context)
+- Conversation memory stored in AsyncStorage (up to 100 messages, last 30 sent as context)
 - `expo/fetch` used for streaming on all platforms (supports getReader())
 
 ## Product
@@ -45,11 +46,22 @@ A Jarvis-inspired AI voice assistant app (Expo mobile + API server) with streami
 - Text input: type and send
 - Streaming AI responses shown token-by-token
 - TTS playback of AI responses (toggleable)
-- Conversation history persisted across sessions
+- Conversation history persisted across sessions (max 100 msgs)
 - Settings: TTS on/off, voice selection (alloy/echo/fable/onyx/nova/shimmer)
 - History: view and clear past conversations
 - Quick commands for common prompts
 - Dark cyberpunk aesthetic with cyan/teal accents
+- Screen stays awake during voice interaction (`expo-keep-awake`)
+
+## Android Background Behavior
+
+- `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_MICROPHONE` permissions declared
+- `WAKE_LOCK` permission declared (prevents CPU sleep on native builds)
+- `RECEIVE_BOOT_COMPLETED` permission declared (auto-start on native builds)
+- AppState listener in AssistantContext: resets status on background/inactive
+- AppState listener in useVoice: stops recording + TTS immediately when backgrounded
+- Audio session properly cleaned up on background (no stuck mic)
+- TTS playback aborted if app is not in foreground before playing
 
 ## AI Integration
 
@@ -69,9 +81,11 @@ A Jarvis-inspired AI voice assistant app (Expo mobile + API server) with streami
 
 ## Gotchas
 
-- `expo-av` is deprecated in SDK 54 (warning only — still functional)
+- `expo-av` is deprecated in SDK 54 (warning only — still functional, migration not needed)
+- `shadow*` style props show deprecation warning on web (visual only, still works on native)
 - Voice recording is disabled on web (Alert shown) — works in Expo Go on device
-- Android permissions: RECORD_AUDIO, INTERNET, MODIFY_AUDIO_SETTINGS, VIBRATE
+- Android permissions: RECORD_AUDIO, INTERNET, MODIFY_AUDIO_SETTINGS, VIBRATE,
+  FOREGROUND_SERVICE, FOREGROUND_SERVICE_MICROPHONE, WAKE_LOCK, RECEIVE_BOOT_COMPLETED
 - Bundle ID: `com.voxai.assistant` — never change after initial setup
 - Do not run `npx expo start` directly — use `restart_workflow` tool
 

@@ -31,7 +31,12 @@
         "RECORD_AUDIO",
         "INTERNET",
         "MODIFY_AUDIO_SETTINGS",
-        "VIBRATE"
+        "VIBRATE",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_MICROPHONE",
+        "WAKE_LOCK",
+        "RECEIVE_BOOT_COMPLETED",
+        "REQUEST_INSTALL_PACKAGES"
       ]
     },
     "web": {

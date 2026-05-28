@@ -4,8 +4,10 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from "react";
+import { AppState, AppStateStatus } from "react-native";
 
 export type AssistantStatus =
   | "idle"
@@ -38,13 +40,21 @@ const AssistantContext = createContext<AssistantContextType | null>(null);
 
 const MESSAGES_KEY = "@vox_messages_v2";
 const SETTINGS_KEY = "@vox_settings_v2";
+const MAX_MESSAGES = 100;
 
 export function AssistantProvider({ children }: { children: React.ReactNode }) {
   const [messages, setMessages] = useState<Message[]>([]);
-  const [status, setStatus] = useState<AssistantStatus>("idle");
+  const [status, setStatusState] = useState<AssistantStatus>("idle");
   const [ttsEnabled, setTtsEnabledState] = useState(true);
   const [selectedVoice, setSelectedVoiceState] = useState("alloy");
+  const statusRef = useRef<AssistantStatus>("idle");
 
+  const setStatus = useCallback((s: AssistantStatus) => {
+    statusRef.current = s;
+    setStatusState(s);
+  }, []);
+
+  // Load persisted data on mount
   useEffect(() => {
     (async () => {
       try {
@@ -52,7 +62,7 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
           AsyncStorage.getItem(MESSAGES_KEY),
           AsyncStorage.getItem(SETTINGS_KEY),
         ]);
-        if (savedMsgs) setMessages(JSON.parse(savedMsgs));
+        if (savedMsgs) setMessages(JSON.parse(savedMsgs).slice(0, MAX_MESSAGES));
         if (savedSettings) {
           const s = JSON.parse(savedSettings);
           if (s.ttsEnabled !== undefined) setTtsEnabledState(s.ttsEnabled);
@@ -64,14 +74,27 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
     })();
   }, []);
 
+  // Handle app going to background — reset active states to prevent stuck UI
+  useEffect(() => {
+    const handleAppStateChange = (nextState: AppStateStatus) => {
+      if (nextState === "background" || nextState === "inactive") {
+        if (statusRef.current === "listening" || statusRef.current === "thinking") {
+          setStatus("idle");
+        }
+      }
+    };
+    const sub = AppState.addEventListener("change", handleAppStateChange);
+    return () => sub.remove();
+  }, [setStatus]);
+
   const persistMessages = useCallback((msgs: Message[]) => {
-    AsyncStorage.setItem(MESSAGES_KEY, JSON.stringify(msgs)).catch(() => {});
+    AsyncStorage.setItem(MESSAGES_KEY, JSON.stringify(msgs.slice(0, MAX_MESSAGES))).catch(() => {});
   }, []);
 
   const addMessage = useCallback(
     (message: Message) => {
       setMessages((prev) => {
-        const next = [message, ...prev];
+        const next = [message, ...prev].slice(0, MAX_MESSAGES);
         persistMessages(next);
         return next;
       });

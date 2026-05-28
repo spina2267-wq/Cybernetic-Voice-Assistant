@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { memo, useEffect } from "react";
 import { Platform, StyleSheet, Text, View } from "react-native";
 import Animated, {
   FadeInDown,
@@ -44,24 +44,21 @@ interface ChatBubbleProps {
   isTyping?: boolean;
 }
 
-export function ChatBubble({ message, isTyping }: ChatBubbleProps) {
+export const ChatBubble = memo(function ChatBubble({ message, isTyping }: ChatBubbleProps) {
   const isUser = message.role === "user";
   const isEmpty = message.content === "";
 
   return (
     <Animated.View
-      entering={Platform.OS !== "web" ? FadeInDown.duration(280).springify() : undefined}
+      entering={Platform.OS !== "web" ? FadeInDown.duration(260).springify() : undefined}
       style={[styles.wrapper, isUser ? styles.userWrapper : styles.assistantWrapper]}
     >
       {isUser ? (
-        /* User message — right aligned */
         <View style={styles.userBubble}>
           <Text style={styles.userText}>{message.content}</Text>
         </View>
       ) : (
-        /* AI message — left aligned with avatar */
         <View style={styles.assistantRow}>
-          {/* Mini orb avatar */}
           <View style={styles.avatar}>
             <View style={styles.avatarInner} />
           </View>
@@ -81,7 +78,7 @@ export function ChatBubble({ message, isTyping }: ChatBubbleProps) {
       )}
     </Animated.View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   wrapper: {
@@ -94,8 +91,6 @@ const styles = StyleSheet.create({
   assistantWrapper: {
     alignItems: "flex-start",
   },
-
-  // User bubble
   userBubble: {
     backgroundColor: "#001E30",
     borderWidth: 1,
@@ -112,8 +107,6 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_400Regular",
     color: "#D0EEFF",
   },
-
-  // AI bubble
   assistantRow: {
     flexDirection: "row",
     alignItems: "flex-start",
