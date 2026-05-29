@@ -29,7 +29,13 @@ interface AssistantContextType {
   setStatus: (status: AssistantStatus) => void;
   addMessage: (message: Message) => void;
   updateLastAssistantMessage: (content: string) => void;
-  commitLastAssistantMessage: () => void;
+  /**
+   * Call once when streaming finishes or on error.
+   * Sets the final content atomically and flushes messages to AsyncStorage.
+   * Passing finalContent here avoids any React batching race between
+   * updateLastAssistantMessage and the persist step.
+   */
+  commitLastAssistantMessage: (finalContent: string) => void;
   clearHistory: () => Promise<void>;
   ttsEnabled: boolean;
   setTtsEnabled: (enabled: boolean) => void;
@@ -52,8 +58,6 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
 
   const statusRef = useRef<AssistantStatus>("idle");
   const statusChangedAtRef = useRef<number>(Date.now());
-  // Ref to the live messages array so persist callbacks never go stale
-  const messagesRef = useRef<Message[]>([]);
 
   const setStatus = useCallback((s: AssistantStatus) => {
     statusRef.current = s;
@@ -70,9 +74,7 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
           AsyncStorage.getItem(SETTINGS_KEY),
         ]);
         if (savedMsgs) {
-          const parsed = JSON.parse(savedMsgs).slice(0, MAX_MESSAGES);
-          setMessages(parsed);
-          messagesRef.current = parsed;
+          setMessages(JSON.parse(savedMsgs).slice(0, MAX_MESSAGES));
         }
         if (savedSettings) {
           const s = JSON.parse(savedSettings);
@@ -121,7 +123,6 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
     (message: Message) => {
       setMessages((prev) => {
         const next = [message, ...prev].slice(0, MAX_MESSAGES);
-        messagesRef.current = next;
         persistMessages(next);
         return next;
       });
@@ -130,25 +131,35 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
   );
 
   // Updates the latest assistant message in state WITHOUT persisting.
-  // Called many times per stream tick — avoid I/O on every token.
+  // Called on every streaming token — avoid I/O per token.
   const updateLastAssistantMessage = useCallback((content: string) => {
     setMessages((prev) => {
       if (prev.length === 0) return prev;
       const next = [...prev];
       next[0] = { ...next[0], content };
-      messagesRef.current = next;
       return next;
     });
   }, []);
 
-  // Call once after the stream completes to flush the final content to storage.
-  const commitLastAssistantMessage = useCallback(() => {
-    persistMessages(messagesRef.current);
-  }, [persistMessages]);
+  // Call once after streaming finishes (success or error).
+  // Sets the final content AND persists inside the same setMessages callback
+  // so there is no race between the last updateLastAssistantMessage call and
+  // the AsyncStorage write (both happen in one React state update).
+  const commitLastAssistantMessage = useCallback(
+    (finalContent: string) => {
+      setMessages((prev) => {
+        if (prev.length === 0) return prev;
+        const next = [...prev];
+        next[0] = { ...next[0], content: finalContent };
+        persistMessages(next);
+        return next;
+      });
+    },
+    [persistMessages]
+  );
 
   const clearHistory = useCallback(async () => {
     setMessages([]);
-    messagesRef.current = [];
     await AsyncStorage.removeItem(MESSAGES_KEY).catch(() => {});
   }, []);
 

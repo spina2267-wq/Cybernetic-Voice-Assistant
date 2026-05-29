@@ -10,10 +10,9 @@ function makeId() {
 
 const getApiBase = () => `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`;
 
-// Stream timeout: abort if no response within 40 seconds
-const STREAM_TIMEOUT_MS = 40_000;
+// Abort the initial connection if no data arrives within this window
+const STREAM_CONNECT_TIMEOUT_MS = 40_000;
 
-// Retry a fetch once on network failure with a short delay
 async function fetchWithRetry(
   url: string,
   options: Parameters<typeof expoFetch>[1],
@@ -30,7 +29,6 @@ async function fetchWithRetry(
   }
 }
 
-// Jarvis-style error messages
 function toJarvisError(raw: string): string {
   if (raw.toLowerCase().includes("api key") || raw.toLowerCase().includes("unauthorized")) {
     return "Authentication failure. AI credentials not configured.";
@@ -63,7 +61,7 @@ export function useAIStream() {
     async (content: string) => {
       if (!content.trim()) return;
 
-      // Capture history snapshot before adding new messages (newest-first → reverse for chronological)
+      // History snapshot before adding new messages (newest-first → reverse for API)
       const history = [...messages]
         .slice(0, 30)
         .reverse()
@@ -77,7 +75,6 @@ export function useAIStream() {
       };
       addMessage(userMsg);
 
-      // Placeholder for streaming assistant response
       const assistantMsg = {
         id: makeId(),
         role: "assistant" as const,
@@ -89,9 +86,12 @@ export function useAIStream() {
 
       let fullContent = "";
 
-      // Abort controller for stream timeout
+      // Abort if the initial connection takes too long
       const abortController = new AbortController();
-      const timeoutHandle = setTimeout(() => abortController.abort(), STREAM_TIMEOUT_MS);
+      const connectTimeout = setTimeout(
+        () => abortController.abort(),
+        STREAM_CONNECT_TIMEOUT_MS
+      );
 
       try {
         const apiMessages = [...history, { role: "user", content: content.trim() }];
@@ -104,7 +104,7 @@ export function useAIStream() {
         });
 
         if (!response.ok) {
-          clearTimeout(timeoutHandle);
+          clearTimeout(connectTimeout);
           const errText = await response.text().catch(() => "");
           let raw = "AI service unavailable.";
           try {
@@ -113,14 +113,16 @@ export function useAIStream() {
           } catch {
             if (errText.length > 0 && errText.length < 200) raw = errText;
           }
-          updateLastAssistantMessage(toJarvisError(raw));
-          commitLastAssistantMessage();
+          const errMsg = toJarvisError(raw);
+          commitLastAssistantMessage(errMsg);
           setStatus("error");
           setTimeout(() => setStatus("idle"), 3000);
           return;
         }
 
-        // Stream the response token by token
+        // First data received — cancel the connect timeout
+        clearTimeout(connectTimeout);
+
         const reader = response.body!.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
@@ -129,9 +131,6 @@ export function useAIStream() {
           const { done, value } = await reader.read();
           if (done) break;
 
-          // Reset the abort timer on each received chunk
-          clearTimeout(timeoutHandle);
-
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
@@ -139,12 +138,12 @@ export function useAIStream() {
           for (const line of lines) {
             if (!line.startsWith("data: ")) continue;
 
-            // Parse JSON and content separately so errors propagate correctly
+            // Parse JSON separately so server errors propagate to the outer catch
             let data: { content?: string; error?: string; done?: boolean } | null = null;
             try {
               data = JSON.parse(line.slice(6));
             } catch {
-              continue; // Skip malformed JSON chunks — non-fatal
+              continue; // Malformed chunk — skip silently
             }
 
             if (!data) continue;
@@ -154,7 +153,6 @@ export function useAIStream() {
               updateLastAssistantMessage(fullContent);
             }
 
-            // Server-side error mid-stream — propagate to outer catch
             if (data.error) {
               reader.cancel().catch(() => {});
               throw new Error(data.error);
@@ -168,27 +166,25 @@ export function useAIStream() {
         }
 
         if (!fullContent) {
-          updateLastAssistantMessage("No response received. Please try again.");
-          commitLastAssistantMessage();
+          commitLastAssistantMessage("No response received. Please try again.");
           setStatus("idle");
           return;
         }
 
-        // Persist the final streamed content to storage
-        commitLastAssistantMessage();
+        // Atomically set final content + persist — no race with updateLastAssistantMessage
+        commitLastAssistantMessage(fullContent);
 
-        // Speak response if TTS enabled and app is still active
-        if (ttsEnabled && fullContent && isAppActive()) {
+        if (ttsEnabled && isAppActive()) {
           setStatus("speaking");
           await speak(fullContent, selectedVoice);
         }
 
         setStatus("idle");
       } catch (err) {
-        clearTimeout(timeoutHandle);
+        clearTimeout(connectTimeout);
         const raw = err instanceof Error ? err.message : "Unknown error";
-        updateLastAssistantMessage(toJarvisError(raw));
-        commitLastAssistantMessage();
+        const errMsg = toJarvisError(raw);
+        commitLastAssistantMessage(errMsg);
         setStatus("error");
         setTimeout(() => setStatus("idle"), 3000);
       }

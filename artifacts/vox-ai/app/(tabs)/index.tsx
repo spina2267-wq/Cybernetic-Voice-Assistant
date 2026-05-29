@@ -31,7 +31,11 @@ import { StatusIndicator } from "@/components/StatusIndicator";
 import { QuickCommands } from "@/components/QuickCommands";
 import { StartupAnimation } from "@/components/StartupAnimation";
 
-const { width } = Dimensions.get("window");
+const { width: _width } = Dimensions.get("window");
+
+// useNativeDriver is only supported on native (not web).
+// Using it on web produces a console warning and falls back to JS animation anyway.
+const USE_NATIVE_DRIVER = Platform.OS !== "web";
 
 export default function ChatScreen() {
   const colors = useColors();
@@ -74,9 +78,9 @@ export default function ChatScreen() {
   const showRecoveryBanner = useCallback(() => {
     setShowResumeBanner(true);
     RNAnimated.sequence([
-      RNAnimated.timing(resumeBannerOpacity, { toValue: 1, duration: 300, useNativeDriver: true }),
+      RNAnimated.timing(resumeBannerOpacity, { toValue: 1, duration: 300, useNativeDriver: USE_NATIVE_DRIVER }),
       RNAnimated.delay(1800),
-      RNAnimated.timing(resumeBannerOpacity, { toValue: 0, duration: 400, useNativeDriver: true }),
+      RNAnimated.timing(resumeBannerOpacity, { toValue: 0, duration: 400, useNativeDriver: USE_NATIVE_DRIVER }),
     ]).start(() => setShowResumeBanner(false));
   }, [resumeBannerOpacity]);
 
@@ -336,7 +340,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#000000",
   },
 
-  // Session recovery banner
   resumeBanner: {
     position: "absolute",
     top: 0,
@@ -416,7 +419,6 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
 
-  // Empty state
   emptyContainer: {
     flex: 1,
     alignItems: "center",
@@ -447,14 +449,12 @@ const styles = StyleSheet.create({
     marginTop: -8,
   },
 
-  // Chat
   messageList: {
     paddingHorizontal: 4,
     paddingVertical: 16,
     flexGrow: 1,
   },
 
-  // Waveform
   waveformRow: {
     alignItems: "center",
     paddingVertical: 8,
@@ -478,7 +478,6 @@ const styles = StyleSheet.create({
     letterSpacing: 4,
   },
 
-  // Input
   inputArea: {
     paddingHorizontal: 14,
     paddingTop: 8,

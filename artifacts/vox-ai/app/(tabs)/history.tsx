@@ -1,5 +1,6 @@
 import React from "react";
 import {
+  Alert,
   FlatList,
   Platform,
   Pressable,
@@ -66,6 +67,24 @@ export default function HistoryScreen() {
   const topPad = insets.top + (Platform.OS === "web" ? 67 : 0);
   const botPad = insets.bottom + (Platform.OS === "web" ? 34 : 0);
 
+  const handleClear = () => {
+    Alert.alert(
+      "Clear History",
+      "This will permanently delete all conversation history. Continue?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Clear",
+          style: "destructive",
+          onPress: async () => {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+            await clearHistory();
+          },
+        },
+      ]
+    );
+  };
+
   return (
     <View style={[styles.root, { backgroundColor: colors.background }]}>
       {/* Header */}
@@ -75,13 +94,7 @@ export default function HistoryScreen() {
         </Pressable>
         <Text style={[styles.headerTitle, { color: colors.primary }]}>HISTORY</Text>
         {messages.length > 0 ? (
-          <Pressable
-            onPress={() => {
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-              clearHistory();
-            }}
-            style={styles.iconBtn}
-          >
+          <Pressable onPress={handleClear} style={styles.iconBtn}>
             <Ionicons name="trash-outline" size={20} color={colors.destructive} />
           </Pressable>
         ) : (

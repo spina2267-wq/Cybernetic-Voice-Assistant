@@ -1,6 +1,7 @@
 import React, { memo, useEffect } from "react";
 import { Platform, StyleSheet, Text, View } from "react-native";
 import Animated, {
+  cancelAnimation,
   FadeInDown,
   useAnimatedStyle,
   useSharedValue,
@@ -12,6 +13,7 @@ import { Message } from "@/context/AssistantContext";
 
 function Dot({ delay }: { delay: number }) {
   const opacity = useSharedValue(0.3);
+
   useEffect(() => {
     const timer = setTimeout(() => {
       opacity.value = withRepeat(
@@ -23,8 +25,15 @@ function Dot({ delay }: { delay: number }) {
         false
       );
     }, delay);
-    return () => clearTimeout(timer);
+
+    return () => {
+      clearTimeout(timer);
+      // Cancel the Reanimated animation when the dot unmounts or delay changes
+      cancelAnimation(opacity);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [delay]);
+
   const style = useAnimatedStyle(() => ({ opacity: opacity.value }));
   return <Animated.View style={[styles.dot, style]} />;
 }

@@ -1,6 +1,7 @@
 import React, { useEffect } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import Animated, {
+  cancelAnimation,
   Easing,
   useAnimatedStyle,
   useSharedValue,
@@ -26,6 +27,10 @@ export function FloatingMicButton({ isRecording, onPress, disabled }: FloatingMi
   const btnScale = useSharedValue(1);
 
   useEffect(() => {
+    // Cancel previous animations before starting new ones
+    cancelAnimation(ringScale);
+    cancelAnimation(ringOpacity);
+
     if (isRecording) {
       ringOpacity.value = withTiming(1, { duration: 200 });
       ringScale.value = withRepeat(
@@ -40,7 +45,12 @@ export function FloatingMicButton({ isRecording, onPress, disabled }: FloatingMi
       ringOpacity.value = withTiming(0, { duration: 200 });
       ringScale.value = withTiming(1, { duration: 300 });
     }
-  }, [isRecording]);
+
+    return () => {
+      cancelAnimation(ringScale);
+      cancelAnimation(ringOpacity);
+    };
+  }, [isRecording]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const ringStyle = useAnimatedStyle(() => ({
     opacity: ringOpacity.value,
@@ -53,6 +63,7 @@ export function FloatingMicButton({ isRecording, onPress, disabled }: FloatingMi
 
   const handlePress = () => {
     if (disabled) return;
+    cancelAnimation(btnScale);
     btnScale.value = withSequence(
       withSpring(0.88, { stiffness: 500, damping: 20 }),
       withSpring(1, { stiffness: 300, damping: 15 })
@@ -68,7 +79,6 @@ export function FloatingMicButton({ isRecording, onPress, disabled }: FloatingMi
   return (
     <Pressable onPress={handlePress} disabled={disabled}>
       <View style={styles.container}>
-        {/* Pulsing ring */}
         <Animated.View
           style={[
             styles.ring,
@@ -81,7 +91,6 @@ export function FloatingMicButton({ isRecording, onPress, disabled }: FloatingMi
             ringStyle,
           ]}
         />
-        {/* Button */}
         <Animated.View
           style={[
             styles.button,

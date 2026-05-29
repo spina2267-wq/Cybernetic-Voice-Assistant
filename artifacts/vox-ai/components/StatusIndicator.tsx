@@ -1,6 +1,7 @@
 import React, { useEffect } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import Animated, {
+  cancelAnimation,
   useAnimatedStyle,
   useSharedValue,
   withRepeat,
@@ -36,6 +37,10 @@ export function StatusIndicator({ status, compact }: StatusIndicatorProps) {
   const isActive = status !== "idle";
 
   useEffect(() => {
+    // Cancel any running animation before starting a new one
+    // to prevent orphaned withRepeat nodes in the Reanimated worklet
+    cancelAnimation(dotOpacity);
+
     if (isActive) {
       dotOpacity.value = withRepeat(
         withSequence(
@@ -48,7 +53,8 @@ export function StatusIndicator({ status, compact }: StatusIndicatorProps) {
     } else {
       dotOpacity.value = withTiming(1, { duration: 300 });
     }
-  }, [status, isActive]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
 
   const dotStyle = useAnimatedStyle(() => ({ opacity: dotOpacity.value }));
 
