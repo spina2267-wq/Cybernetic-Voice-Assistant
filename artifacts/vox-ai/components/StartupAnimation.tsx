@@ -1,6 +1,7 @@
 import React, { useEffect } from "react";
-import { Dimensions, StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import Animated, {
+  cancelAnimation,
   Easing,
   useAnimatedStyle,
   useSharedValue,
@@ -8,11 +9,9 @@ import Animated, {
   withRepeat,
   withSequence,
   withTiming,
-  runOnJS,
 } from "react-native-reanimated";
 import { LinearGradient } from "expo-linear-gradient";
 
-const { width, height } = Dimensions.get("window");
 const DURATION = 2800;
 
 interface StartupAnimationProps {
@@ -20,6 +19,9 @@ interface StartupAnimationProps {
 }
 
 export function StartupAnimation({ onComplete }: StartupAnimationProps) {
+  // useWindowDimensions: reads current dimensions at render time (rotation-safe)
+  const { width, height } = useWindowDimensions();
+
   const containerOpacity = useSharedValue(1);
   const voxOpacity = useSharedValue(0);
   const voxScale = useSharedValue(0.6);
@@ -67,7 +69,7 @@ export function StartupAnimation({ onComplete }: StartupAnimationProps) {
     // Subtitle
     subtitleOpacity.value = withDelay(900, withTiming(1, { duration: 300 }));
 
-    // Progress bar
+    // Progress bar — fills to actual screen width minus padding
     progressWidth.value = withDelay(
       1000,
       withTiming(width - 80, { duration: 900, easing: Easing.inOut(Easing.quad) })
@@ -86,7 +88,26 @@ export function StartupAnimation({ onComplete }: StartupAnimationProps) {
     );
 
     const timer = setTimeout(onComplete, DURATION);
-    return () => clearTimeout(timer);
+
+    // Cancel all animations and timer on unmount (e.g. fast navigation)
+    return () => {
+      clearTimeout(timer);
+      cancelAnimation(orbOpacity);
+      cancelAnimation(orbScale);
+      cancelAnimation(ring1Op);
+      cancelAnimation(ring1);
+      cancelAnimation(scanOpacity);
+      cancelAnimation(scanLine);
+      cancelAnimation(voxOpacity);
+      cancelAnimation(voxScale);
+      cancelAnimation(aiOpacity);
+      cancelAnimation(subtitleOpacity);
+      cancelAnimation(progressWidth);
+      cancelAnimation(statusOpacity);
+      cancelAnimation(readyOpacity);
+      cancelAnimation(containerOpacity);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const containerStyle = useAnimatedStyle(() => ({ opacity: containerOpacity.value }));
@@ -144,7 +165,7 @@ export function StartupAnimation({ onComplete }: StartupAnimationProps) {
       </Animated.Text>
 
       {/* Progress */}
-      <Animated.View style={[styles.progressTrack, statusStyle]}>
+      <Animated.View style={[styles.progressTrack, statusStyle, { width: width - 80 }]}>
         <Animated.View style={[styles.progressFill, progressStyle]}>
           <LinearGradient
             colors={["#003355", "#00D4FF", "#00FFCC"]}
@@ -255,7 +276,6 @@ const styles = StyleSheet.create({
 
   // Progress
   progressTrack: {
-    width: width - 80,
     height: 2,
     backgroundColor: "#001020",
     borderRadius: 1,

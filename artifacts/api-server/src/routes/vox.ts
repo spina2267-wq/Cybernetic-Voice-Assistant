@@ -4,6 +4,16 @@ import { logger } from "../lib/logger";
 
 const router = Router();
 
+// Lazy singleton — OpenAI client is created once on first request and reused.
+// Avoids re-reading env vars and re-allocating the client object on every HTTP request.
+type OpenAIConfig = {
+  client: OpenAI;
+  chatModel: string;
+  ttsModel: "tts-1";
+  sttModel: string;
+};
+let _openAIConfig: OpenAIConfig | null | undefined = undefined;
+
 const SYSTEM_PROMPT = `You are VOX — an advanced artificial intelligence system. The personal AI of your user. You combine the precision of a supercomputer with the insight of a trusted advisor.
 
 Core directives:
@@ -19,29 +29,34 @@ Core directives:
 - If asked what you can do: give a brief, confident overview of your capabilities.
 - For calculations, analysis, writing, and reasoning: respond with precision and confidence.`;
 
-function getOpenAI() {
+function getOpenAI(): OpenAIConfig | null {
+  if (_openAIConfig !== undefined) return _openAIConfig;
+
   const replitKey = process.env["AI_INTEGRATIONS_OPENAI_API_KEY"];
   const replitBase = process.env["AI_INTEGRATIONS_OPENAI_BASE_URL"];
   const directKey = process.env["OPENAI_API_KEY"];
 
   if (replitKey && replitBase) {
-    return {
+    _openAIConfig = {
       client: new OpenAI({ apiKey: replitKey, baseURL: replitBase }),
       chatModel: "gpt-5-mini",
-      ttsModel: "tts-1" as const,
-      sttModel: "gpt-4o-mini-transcribe" as const,
+      ttsModel: "tts-1",
+      sttModel: "gpt-4o-mini-transcribe",
     };
+    return _openAIConfig;
   }
 
   if (directKey) {
-    return {
+    _openAIConfig = {
       client: new OpenAI({ apiKey: directKey }),
       chatModel: "gpt-4o-mini",
-      ttsModel: "tts-1" as const,
-      sttModel: "whisper-1" as const,
+      ttsModel: "tts-1",
+      sttModel: "whisper-1",
     };
+    return _openAIConfig;
   }
 
+  _openAIConfig = null;
   return null;
 }
 

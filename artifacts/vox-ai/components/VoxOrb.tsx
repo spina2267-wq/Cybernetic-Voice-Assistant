@@ -186,6 +186,18 @@ export const VoxOrb = React.memo(function VoxOrb({ status, size = 100 }: VoxOrbP
     );
 
     scanOpacity.value = withTiming(isIdle ? 0.2 : 0.7, { duration: 400 });
+    // Cancel all animations on unmount or before next effect run
+    return () => {
+      cancelAnimation(ring1Scale);
+      cancelAnimation(ring2Scale);
+      cancelAnimation(ring3Scale);
+      cancelAnimation(ring1Opacity);
+      cancelAnimation(ring2Opacity);
+      cancelAnimation(ring3Opacity);
+      cancelAnimation(corePulse);
+      cancelAnimation(rotateScan);
+      cancelAnimation(scanOpacity);
+    };
   }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const coreStyle = useAnimatedStyle(() => ({

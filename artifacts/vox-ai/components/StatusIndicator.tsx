@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { memo, useEffect } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import Animated, {
   cancelAnimation,
@@ -31,14 +31,12 @@ interface StatusIndicatorProps {
   compact?: boolean;
 }
 
-export function StatusIndicator({ status, compact }: StatusIndicatorProps) {
+export const StatusIndicator = memo(function StatusIndicator({ status, compact }: StatusIndicatorProps) {
   const dotOpacity = useSharedValue(1);
   const color = STATUS_COLOR[status];
   const isActive = status !== "idle";
 
   useEffect(() => {
-    // Cancel any running animation before starting a new one
-    // to prevent orphaned withRepeat nodes in the Reanimated worklet
     cancelAnimation(dotOpacity);
 
     if (isActive) {
@@ -53,6 +51,9 @@ export function StatusIndicator({ status, compact }: StatusIndicatorProps) {
     } else {
       dotOpacity.value = withTiming(1, { duration: 300 });
     }
+
+    // Cancel on unmount or before next effect run
+    return () => cancelAnimation(dotOpacity);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status]);
 
@@ -73,7 +74,7 @@ export function StatusIndicator({ status, compact }: StatusIndicatorProps) {
       <Text style={[styles.text, { color }]}>{STATUS_LABEL[status]}</Text>
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   container: {
