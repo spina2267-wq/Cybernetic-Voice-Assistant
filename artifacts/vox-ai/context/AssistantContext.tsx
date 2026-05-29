@@ -32,8 +32,6 @@ interface AssistantContextType {
   /**
    * Call once when streaming finishes or on error.
    * Sets the final content atomically and flushes messages to AsyncStorage.
-   * Passing finalContent here avoids any React batching race between
-   * updateLastAssistantMessage and the persist step.
    */
   commitLastAssistantMessage: (finalContent: string) => void;
   clearHistory: () => Promise<void>;
@@ -59,6 +57,11 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
   const statusRef = useRef<AssistantStatus>("idle");
   const statusChangedAtRef = useRef<number>(Date.now());
 
+  // Refs for settings — prevents stale closures in setTtsEnabled/setSelectedVoice
+  // when both are updated in quick succession.
+  const ttsEnabledRef = useRef(ttsEnabled);
+  const selectedVoiceRef = useRef(selectedVoice);
+
   const setStatus = useCallback((s: AssistantStatus) => {
     statusRef.current = s;
     statusChangedAtRef.current = Date.now();
@@ -74,12 +77,22 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
           AsyncStorage.getItem(SETTINGS_KEY),
         ]);
         if (savedMsgs) {
-          setMessages(JSON.parse(savedMsgs).slice(0, MAX_MESSAGES));
+          const parsed = JSON.parse(savedMsgs);
+          // Validate that we got an array of messages before trusting it
+          if (Array.isArray(parsed)) {
+            setMessages(parsed.slice(0, MAX_MESSAGES));
+          }
         }
         if (savedSettings) {
           const s = JSON.parse(savedSettings);
-          if (s.ttsEnabled !== undefined) setTtsEnabledState(s.ttsEnabled);
-          if (s.selectedVoice) setSelectedVoiceState(s.selectedVoice);
+          if (typeof s.ttsEnabled === "boolean") {
+            setTtsEnabledState(s.ttsEnabled);
+            ttsEnabledRef.current = s.ttsEnabled;
+          }
+          if (typeof s.selectedVoice === "string" && s.selectedVoice) {
+            setSelectedVoiceState(s.selectedVoice);
+            selectedVoiceRef.current = s.selectedVoice;
+          }
         }
       } catch {
         // Non-fatal — fresh start
@@ -131,7 +144,7 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
   );
 
   // Updates the latest assistant message in state WITHOUT persisting.
-  // Called on every streaming token — avoid I/O per token.
+  // Called on every streaming token — avoid AsyncStorage I/O per token.
   const updateLastAssistantMessage = useCallback((content: string) => {
     setMessages((prev) => {
       if (prev.length === 0) return prev;
@@ -142,9 +155,7 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Call once after streaming finishes (success or error).
-  // Sets the final content AND persists inside the same setMessages callback
-  // so there is no race between the last updateLastAssistantMessage call and
-  // the AsyncStorage write (both happen in one React state update).
+  // Sets the final content AND persists inside the same setMessages callback.
   const commitLastAssistantMessage = useCallback(
     (finalContent: string) => {
       setMessages((prev) => {
@@ -163,27 +174,25 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
     await AsyncStorage.removeItem(MESSAGES_KEY).catch(() => {});
   }, []);
 
-  const setTtsEnabled = useCallback(
-    (enabled: boolean) => {
-      setTtsEnabledState(enabled);
-      AsyncStorage.setItem(
-        SETTINGS_KEY,
-        JSON.stringify({ ttsEnabled: enabled, selectedVoice })
-      ).catch(() => {});
-    },
-    [selectedVoice]
-  );
+  // Use refs to read current settings values — avoids stale closures when
+  // ttsEnabled and selectedVoice are updated in rapid succession.
+  const setTtsEnabled = useCallback((enabled: boolean) => {
+    ttsEnabledRef.current = enabled;
+    setTtsEnabledState(enabled);
+    AsyncStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({ ttsEnabled: enabled, selectedVoice: selectedVoiceRef.current })
+    ).catch(() => {});
+  }, []); // stable — reads from refs, no external deps
 
-  const setSelectedVoice = useCallback(
-    (voice: string) => {
-      setSelectedVoiceState(voice);
-      AsyncStorage.setItem(
-        SETTINGS_KEY,
-        JSON.stringify({ ttsEnabled, selectedVoice: voice })
-      ).catch(() => {});
-    },
-    [ttsEnabled]
-  );
+  const setSelectedVoice = useCallback((voice: string) => {
+    selectedVoiceRef.current = voice;
+    setSelectedVoiceState(voice);
+    AsyncStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({ ttsEnabled: ttsEnabledRef.current, selectedVoice: voice })
+    ).catch(() => {});
+  }, []); // stable — reads from refs, no external deps
 
   return (
     <AssistantContext.Provider

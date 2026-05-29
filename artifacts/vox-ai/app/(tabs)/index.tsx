@@ -1,7 +1,6 @@
 import React, { useCallback, useRef, useState } from "react";
 import {
   Animated as RNAnimated,
-  Dimensions,
   FlatList,
   Platform,
   Pressable,
@@ -17,7 +16,6 @@ import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import { useKeepAwake } from "expo-keep-awake";
 
 import { useAssistant } from "@/context/AssistantContext";
 import { useAIStream } from "@/hooks/useAIStream";
@@ -31,10 +29,7 @@ import { StatusIndicator } from "@/components/StatusIndicator";
 import { QuickCommands } from "@/components/QuickCommands";
 import { StartupAnimation } from "@/components/StartupAnimation";
 
-const { width: _width } = Dimensions.get("window");
-
-// useNativeDriver is only supported on native (not web).
-// Using it on web produces a console warning and falls back to JS animation anyway.
+// useNativeDriver: only supported on native — web falls back to JS animation driver.
 const USE_NATIVE_DRIVER = Platform.OS !== "web";
 
 export default function ChatScreen() {
@@ -47,9 +42,6 @@ export default function ChatScreen() {
   const [showStartup, setShowStartup] = useState(true);
   const [isSending, setIsSending] = useState(false);
   const inputRef = useRef<TextInput>(null);
-
-  // Keep screen awake during active voice interaction
-  useKeepAwake();
 
   // Stable ref to sendMessage — avoids stale closure in voice callbacks
   const sendMessageRef = useRef(sendMessage);
@@ -129,6 +121,16 @@ export default function ChatScreen() {
       }
     }
   };
+
+  // Stable memoized handler for QuickCommands — prevents breaking React.memo on that component
+  const handleQuickCommand = useCallback(
+    (cmd: string) => {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      setIsSending(true);
+      sendMessageRef.current(cmd).finally(() => setIsSending(false));
+    },
+    [] // sendMessageRef is a ref, stable across renders — no deps needed
+  );
 
   const renderChatBubble = useCallback(
     ({ item, index }: { item: { id: string; role: "user" | "assistant"; content: string; timestamp: number }; index: number }) => (
@@ -226,13 +228,7 @@ export default function ChatScreen() {
             <VoxOrb status={status} size={110} />
             <Text style={styles.welcomeTitle}>How can I help you?</Text>
             <Text style={styles.welcomeSub}>Speak or type to begin</Text>
-            <QuickCommands
-              onCommand={(cmd) => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                setIsSending(true);
-                sendMessage(cmd).finally(() => setIsSending(false));
-              }}
-            />
+            <QuickCommands onCommand={handleQuickCommand} />
           </View>
         ) : (
           <FlatList

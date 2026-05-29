@@ -4,6 +4,18 @@ import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { useEffect, useRef, useState } from "react";
 import { Alert, AppState, AppStateStatus, Platform } from "react-native";
 
+// Keep-awake is only meaningful on native (mic recording not supported on web).
+// Calling deactivateKeepAwake before activation throws on web — guard all calls.
+const KEEP_AWAKE_TAG = "vox-recording";
+const keepAwakeActivate = () => {
+  if (Platform.OS === "web") return;
+  activateKeepAwakeAsync(KEEP_AWAKE_TAG).catch(() => {});
+};
+const keepAwakeDeactivate = () => {
+  if (Platform.OS === "web") return;
+  try { deactivateKeepAwake(KEEP_AWAKE_TAG); } catch {}
+};
+
 // expo-file-system v19 type workaround: legacy API still works at runtime
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const FS = _FileSystem as any;
@@ -27,15 +39,16 @@ const getApiBase = () => `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`;
 
 const MAX_RECORDING_MS = 30_000;
 
-interface UseVoiceOptions {
+export interface UseVoiceOptions {
   /**
-   * Called when the auto-stop timer fires and transcription completes.
-   * Receive the transcribed text (or null on failure) so callers can send it.
+   * Called when the 30-second auto-stop timer fires.
+   * Receives the transcribed text (or null if transcription failed).
+   * Use this to send the message automatically.
    */
-  onAutoStop?: (transcribed: string | null) => void;
+  onAutoStop?: (text: string | null) => void;
 }
 
-export function useVoice({ onAutoStop }: UseVoiceOptions = {}) {
+export function useVoice(options: UseVoiceOptions = {}) {
   const [isRecording, setIsRecording] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
 
@@ -43,9 +56,9 @@ export function useVoice({ onAutoStop }: UseVoiceOptions = {}) {
   const soundRef = useRef<Audio.Sound | null>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Stable ref so the timer callback always has the latest onAutoStop
-  const onAutoStopRef = useRef(onAutoStop);
-  useEffect(() => { onAutoStopRef.current = onAutoStop; }, [onAutoStop]);
+  // Stable ref for onAutoStop — prevents stale closure in the timer
+  const onAutoStopRef = useRef(options.onAutoStop);
+  useEffect(() => { onAutoStopRef.current = options.onAutoStop; }, [options.onAutoStop]);
 
   const clearRecordingTimer = () => {
     if (recordingTimerRef.current) {
@@ -59,6 +72,7 @@ export function useVoice({ onAutoStop }: UseVoiceOptions = {}) {
     const handleAppStateChange = async (nextState: AppStateStatus) => {
       if (nextState === "background" || nextState === "inactive") {
         clearRecordingTimer();
+        keepAwakeDeactivate();
 
         if (recordingRef.current) {
           try { await recordingRef.current.stopAndUnloadAsync(); } catch {}
@@ -92,6 +106,7 @@ export function useVoice({ onAutoStop }: UseVoiceOptions = {}) {
   useEffect(() => {
     return () => {
       clearRecordingTimer();
+      keepAwakeDeactivate();
       recordingRef.current?.stopAndUnloadAsync().catch(() => {});
       soundRef.current?.unloadAsync().catch(() => {});
     };
@@ -99,7 +114,7 @@ export function useVoice({ onAutoStop }: UseVoiceOptions = {}) {
 
   const stopRecording = async (): Promise<string | null> => {
     clearRecordingTimer();
-    deactivateKeepAwake("vox-recording");
+    keepAwakeDeactivate();
 
     try {
       if (!recordingRef.current) return null;
@@ -168,14 +183,14 @@ export function useVoice({ onAutoStop }: UseVoiceOptions = {}) {
       recordingRef.current = recording;
       setIsRecording(true);
 
-      activateKeepAwakeAsync("vox-recording").catch(() => {});
+      // Keep screen on while mic is active (native only — guarded inside helper)
+      keepAwakeActivate();
 
-      // Auto-stop after MAX_RECORDING_MS to prevent stuck mic.
-      // Transcription result is forwarded to onAutoStop so the caller can send it.
+      // Auto-stop after MAX_RECORDING_MS to prevent stuck mic
       clearRecordingTimer();
       recordingTimerRef.current = setTimeout(async () => {
         if (recordingRef.current) {
-          const text = await stopRecording();
+          const text = await stopRecording().catch(() => null);
           onAutoStopRef.current?.(text);
         }
       }, MAX_RECORDING_MS);
@@ -193,8 +208,6 @@ export function useVoice({ onAutoStop }: UseVoiceOptions = {}) {
     attempt = 1
   ): Promise<void> => {
     if (Platform.OS === "web") return;
-
-    let tempUri: string | null = null;
 
     try {
       setIsSpeaking(true);
@@ -215,14 +228,18 @@ export function useVoice({ onAutoStop }: UseVoiceOptions = {}) {
           await new Promise((r) => setTimeout(r, 1000));
           return speak(text, voice, 2);
         }
+        setIsSpeaking(false);
         return;
       }
 
       // Abort if app went to background while waiting for TTS
-      if (AppState.currentState !== "active") return;
+      if (AppState.currentState !== "active") {
+        setIsSpeaking(false);
+        return;
+      }
 
       const { audio, format } = await res.json();
-      tempUri = (documentDirectory ?? "") + `tts_${Date.now()}.${format}`;
+      const tempUri = (documentDirectory ?? "") + `tts_${Date.now()}.${format}`;
 
       await writeAsStringAsync(tempUri, audio, {
         encoding: EncodingType.Base64,
@@ -246,14 +263,11 @@ export function useVoice({ onAutoStop }: UseVoiceOptions = {}) {
 
       await sound.unloadAsync().catch(() => {});
       soundRef.current = null;
+      await deleteAsync(tempUri, { idempotent: true }).catch(() => {});
     } catch {
       // TTS failure is non-fatal — text is still visible in chat
     } finally {
       setIsSpeaking(false);
-      // Always clean up temp file regardless of success or failure
-      if (tempUri) {
-        deleteAsync(tempUri, { idempotent: true }).catch(() => {});
-      }
     }
   };
 

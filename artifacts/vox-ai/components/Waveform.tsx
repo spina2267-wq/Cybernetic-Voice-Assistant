@@ -1,6 +1,7 @@
-import React, { useEffect } from "react";
+import React, { memo, useEffect } from "react";
 import { StyleSheet, View } from "react-native";
 import Animated, {
+  cancelAnimation,
   Easing,
   useAnimatedStyle,
   useSharedValue,
@@ -18,14 +19,18 @@ interface WaveformBarProps {
   color: string;
 }
 
-function WaveformBar({ index, isActive, color }: WaveformBarProps) {
+const WaveformBar = memo(function WaveformBar({ index, isActive, color }: WaveformBarProps) {
   const h = useSharedValue(4);
 
   useEffect(() => {
+    // Always cancel the previous animation before starting a new one
+    cancelAnimation(h);
+
     if (!isActive) {
       h.value = withTiming(4, { duration: 300 });
       return;
     }
+
     // Deterministic wave pattern based on bar index
     const mid = NUM_BARS / 2;
     const dist = Math.abs(index - mid);
@@ -40,18 +45,23 @@ function WaveformBar({ index, isActive, color }: WaveformBarProps) {
       -1,
       false
     );
-  }, [isActive, index]);
+
+    // Cancel on unmount or next effect run
+    return () => {
+      cancelAnimation(h);
+    };
+  }, [isActive, index]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const style = useAnimatedStyle(() => ({ height: h.value }));
 
   return <Animated.View style={[styles.bar, { backgroundColor: color }, style]} />;
-}
+});
 
 interface WaveformProps {
   isActive: boolean;
 }
 
-export function Waveform({ isActive }: WaveformProps) {
+export const Waveform = memo(function Waveform({ isActive }: WaveformProps) {
   const colors = useColors();
   const color = isActive ? colors.accent : colors.primary;
 
@@ -62,7 +72,7 @@ export function Waveform({ isActive }: WaveformProps) {
       ))}
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   container: {

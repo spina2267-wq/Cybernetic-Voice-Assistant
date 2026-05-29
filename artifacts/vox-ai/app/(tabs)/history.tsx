@@ -30,7 +30,7 @@ function formatTimestamp(ts: number): string {
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
-function MessageItem({ message }: { message: Message }) {
+const MessageItem = React.memo(function MessageItem({ message }: { message: Message }) {
   const colors = useColors();
   const isUser = message.role === "user";
 
@@ -58,7 +58,7 @@ function MessageItem({ message }: { message: Message }) {
       </Text>
     </View>
   );
-}
+});
 
 export default function HistoryScreen() {
   const colors = useColors();
