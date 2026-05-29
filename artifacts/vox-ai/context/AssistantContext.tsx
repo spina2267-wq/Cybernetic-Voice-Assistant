@@ -104,7 +104,9 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
   useAppLifecycle({
     onBackground: useCallback(() => {
       const current = statusRef.current;
-      if (current === "listening" || current === "thinking") {
+      // Reset all active states on background — useVoice stops audio independently,
+      // but the status indicator must also reflect the actual idle state.
+      if (current === "listening" || current === "thinking" || current === "speaking") {
         setStatus("idle");
       }
     }, [setStatus]),

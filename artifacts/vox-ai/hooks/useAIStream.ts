@@ -123,6 +123,13 @@ export function useAIStream() {
           const { done, value } = await reader.read();
           if (done) break;
 
+          // Abort streaming if app went to background — server will detect the
+          // closed connection via req.on("close") and stop generating tokens.
+          if (!isAppActive()) {
+            reader.cancel().catch(() => {});
+            break;
+          }
+
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";

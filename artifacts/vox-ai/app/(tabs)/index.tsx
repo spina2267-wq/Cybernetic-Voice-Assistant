@@ -100,18 +100,20 @@ export default function ChatScreen() {
   const handleMic = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     if (isRecording) {
-      // Transition away from "listening" — sendMessage will set "thinking"
-      const transcribed = await stopRecording();
-      if (transcribed) {
-        setIsSending(true);
-        try {
+      // Lock the UI immediately — stopRecording() takes 2-5s (transcription network call).
+      // Without this guard, the user can tap mic again and start a new recording
+      // during the transcription window (isRecording=false but isSending=false).
+      setIsSending(true);
+      try {
+        const transcribed = await stopRecording();
+        if (transcribed) {
           await sendMessage(transcribed);
-        } finally {
-          setIsSending(false);
+        } else {
+          // Recording stopped but no transcription — reset to idle
+          setStatus("idle");
         }
-      } else {
-        // Recording stopped but no transcription — reset to idle
-        setStatus("idle");
+      } finally {
+        setIsSending(false);
       }
     } else {
       const started = await startRecording();
