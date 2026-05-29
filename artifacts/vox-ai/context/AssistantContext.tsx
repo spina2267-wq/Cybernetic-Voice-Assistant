@@ -29,6 +29,7 @@ interface AssistantContextType {
   setStatus: (status: AssistantStatus) => void;
   addMessage: (message: Message) => void;
   updateLastAssistantMessage: (content: string) => void;
+  commitLastAssistantMessage: () => void;
   clearHistory: () => Promise<void>;
   ttsEnabled: boolean;
   setTtsEnabled: (enabled: boolean) => void;
@@ -41,7 +42,6 @@ const AssistantContext = createContext<AssistantContextType | null>(null);
 const MESSAGES_KEY = "@vox_messages_v2";
 const SETTINGS_KEY = "@vox_settings_v2";
 const MAX_MESSAGES = 100;
-// Time after which a "stuck" status is considered stale (ms)
 const STALE_STATUS_MS = 45_000;
 
 export function AssistantProvider({ children }: { children: React.ReactNode }) {
@@ -50,9 +50,10 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
   const [ttsEnabled, setTtsEnabledState] = useState(true);
   const [selectedVoice, setSelectedVoiceState] = useState("alloy");
 
-  // Refs for use inside callbacks/effects without stale closures
   const statusRef = useRef<AssistantStatus>("idle");
   const statusChangedAtRef = useRef<number>(Date.now());
+  // Ref to the live messages array so persist callbacks never go stale
+  const messagesRef = useRef<Message[]>([]);
 
   const setStatus = useCallback((s: AssistantStatus) => {
     statusRef.current = s;
@@ -69,7 +70,9 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
           AsyncStorage.getItem(SETTINGS_KEY),
         ]);
         if (savedMsgs) {
-          setMessages(JSON.parse(savedMsgs).slice(0, MAX_MESSAGES));
+          const parsed = JSON.parse(savedMsgs).slice(0, MAX_MESSAGES);
+          setMessages(parsed);
+          messagesRef.current = parsed;
         }
         if (savedSettings) {
           const s = JSON.parse(savedSettings);
@@ -77,7 +80,7 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
           if (s.selectedVoice) setSelectedVoiceState(s.selectedVoice);
         }
       } catch {
-        // Ignore storage errors — non-fatal
+        // Non-fatal — fresh start
       }
     })();
   }, []);
@@ -95,12 +98,10 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
       const current = statusRef.current;
       const staleMs = Date.now() - statusChangedAtRef.current;
 
-      // Reset if stuck in an active state for too long
       const isStuck =
         (current === "thinking" || current === "listening" || current === "speaking") &&
         staleMs > STALE_STATUS_MS;
 
-      // Also reset if we were away for more than 5 minutes
       const longAbsence = backgroundDurationMs > 5 * 60 * 1000;
 
       if (isStuck || (longAbsence && current !== "idle")) {
@@ -120,6 +121,7 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
     (message: Message) => {
       setMessages((prev) => {
         const next = [message, ...prev].slice(0, MAX_MESSAGES);
+        messagesRef.current = next;
         persistMessages(next);
         return next;
       });
@@ -127,17 +129,26 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
     [persistMessages]
   );
 
+  // Updates the latest assistant message in state WITHOUT persisting.
+  // Called many times per stream tick — avoid I/O on every token.
   const updateLastAssistantMessage = useCallback((content: string) => {
     setMessages((prev) => {
       if (prev.length === 0) return prev;
       const next = [...prev];
       next[0] = { ...next[0], content };
+      messagesRef.current = next;
       return next;
     });
   }, []);
 
+  // Call once after the stream completes to flush the final content to storage.
+  const commitLastAssistantMessage = useCallback(() => {
+    persistMessages(messagesRef.current);
+  }, [persistMessages]);
+
   const clearHistory = useCallback(async () => {
     setMessages([]);
+    messagesRef.current = [];
     await AsyncStorage.removeItem(MESSAGES_KEY).catch(() => {});
   }, []);
 
@@ -171,6 +182,7 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
         setStatus,
         addMessage,
         updateLastAssistantMessage,
+        commitLastAssistantMessage,
         clearHistory,
         ttsEnabled,
         setTtsEnabled,

@@ -10,6 +10,9 @@ function makeId() {
 
 const getApiBase = () => `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`;
 
+// Stream timeout: abort if no response within 40 seconds
+const STREAM_TIMEOUT_MS = 40_000;
+
 // Retry a fetch once on network failure with a short delay
 async function fetchWithRetry(
   url: string,
@@ -49,6 +52,7 @@ export function useAIStream() {
     messages,
     addMessage,
     updateLastAssistantMessage,
+    commitLastAssistantMessage,
     setStatus,
     ttsEnabled,
     selectedVoice,
@@ -85,6 +89,10 @@ export function useAIStream() {
 
       let fullContent = "";
 
+      // Abort controller for stream timeout
+      const abortController = new AbortController();
+      const timeoutHandle = setTimeout(() => abortController.abort(), STREAM_TIMEOUT_MS);
+
       try {
         const apiMessages = [...history, { role: "user", content: content.trim() }];
 
@@ -92,9 +100,11 @@ export function useAIStream() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ messages: apiMessages }),
+          signal: abortController.signal,
         });
 
         if (!response.ok) {
+          clearTimeout(timeoutHandle);
           const errText = await response.text().catch(() => "");
           let raw = "AI service unavailable.";
           try {
@@ -104,6 +114,7 @@ export function useAIStream() {
             if (errText.length > 0 && errText.length < 200) raw = errText;
           }
           updateLastAssistantMessage(toJarvisError(raw));
+          commitLastAssistantMessage();
           setStatus("error");
           setTimeout(() => setStatus("idle"), 3000);
           return;
@@ -118,35 +129,53 @@ export function useAIStream() {
           const { done, value } = await reader.read();
           if (done) break;
 
+          // Reset the abort timer on each received chunk
+          clearTimeout(timeoutHandle);
+
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
 
           for (const line of lines) {
             if (!line.startsWith("data: ")) continue;
+
+            // Parse JSON and content separately so errors propagate correctly
+            let data: { content?: string; error?: string; done?: boolean } | null = null;
             try {
-              const data = JSON.parse(line.slice(6));
-              if (data.content) {
-                fullContent += data.content;
-                updateLastAssistantMessage(fullContent);
-                // Switch from "thinking" to showing content as soon as first token arrives
-                if (fullContent.length === data.content.length) {
-                  setStatus("thinking"); // keep thinking during stream
-                }
-              }
-              if (data.error) throw new Error(data.error);
-              if (data.done) break;
+              data = JSON.parse(line.slice(6));
             } catch {
-              // Skip malformed SSE chunks — non-fatal
+              continue; // Skip malformed JSON chunks — non-fatal
+            }
+
+            if (!data) continue;
+
+            if (data.content) {
+              fullContent += data.content;
+              updateLastAssistantMessage(fullContent);
+            }
+
+            // Server-side error mid-stream — propagate to outer catch
+            if (data.error) {
+              reader.cancel().catch(() => {});
+              throw new Error(data.error);
+            }
+
+            if (data.done) {
+              reader.cancel().catch(() => {});
+              break;
             }
           }
         }
 
         if (!fullContent) {
           updateLastAssistantMessage("No response received. Please try again.");
+          commitLastAssistantMessage();
           setStatus("idle");
           return;
         }
+
+        // Persist the final streamed content to storage
+        commitLastAssistantMessage();
 
         // Speak response if TTS enabled and app is still active
         if (ttsEnabled && fullContent && isAppActive()) {
@@ -156,13 +185,15 @@ export function useAIStream() {
 
         setStatus("idle");
       } catch (err) {
+        clearTimeout(timeoutHandle);
         const raw = err instanceof Error ? err.message : "Unknown error";
         updateLastAssistantMessage(toJarvisError(raw));
+        commitLastAssistantMessage();
         setStatus("error");
         setTimeout(() => setStatus("idle"), 3000);
       }
     },
-    [messages, addMessage, updateLastAssistantMessage, setStatus, ttsEnabled, selectedVoice, speak]
+    [messages, addMessage, updateLastAssistantMessage, commitLastAssistantMessage, setStatus, ttsEnabled, selectedVoice, speak]
   );
 
   return { sendMessage };

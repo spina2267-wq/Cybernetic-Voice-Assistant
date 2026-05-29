@@ -36,9 +36,8 @@ const { width } = Dimensions.get("window");
 export default function ChatScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { messages, status } = useAssistant();
+  const { messages, status, setStatus } = useAssistant();
   const { sendMessage } = useAIStream();
-  const { isRecording, startRecording, stopRecording } = useVoice();
 
   const [inputText, setInputText] = useState("");
   const [showStartup, setShowStartup] = useState(true);
@@ -47,6 +46,26 @@ export default function ChatScreen() {
 
   // Keep screen awake during active voice interaction
   useKeepAwake();
+
+  // Stable ref to sendMessage — avoids stale closure in voice callbacks
+  const sendMessageRef = useRef(sendMessage);
+  sendMessageRef.current = sendMessage;
+
+  // Called by useVoice when the 30s auto-stop timer fires
+  const handleAutoStop = useCallback(async (text: string | null) => {
+    setStatus("idle");
+    if (!text) return;
+    setIsSending(true);
+    try {
+      await sendMessageRef.current(text);
+    } finally {
+      setIsSending(false);
+    }
+  }, [setStatus]);
+
+  const { isRecording, startRecording, stopRecording } = useVoice({
+    onAutoStop: handleAutoStop,
+  });
 
   // Session recovery banner (shows briefly on resume from background)
   const [showResumeBanner, setShowResumeBanner] = useState(false);
@@ -63,7 +82,6 @@ export default function ChatScreen() {
 
   useAppLifecycle({
     onForeground: useCallback((backgroundDurationMs: number) => {
-      // Show recovery banner only if we were away for at least 10 seconds
       if (backgroundDurationMs > 10_000) {
         showRecoveryBanner();
       }
@@ -86,6 +104,7 @@ export default function ChatScreen() {
   const handleMic = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     if (isRecording) {
+      // Transition away from "listening" — sendMessage will set "thinking"
       const transcribed = await stopRecording();
       if (transcribed) {
         setIsSending(true);
@@ -94,9 +113,16 @@ export default function ChatScreen() {
         } finally {
           setIsSending(false);
         }
+      } else {
+        // Recording stopped but no transcription — reset to idle
+        setStatus("idle");
       }
     } else {
-      await startRecording();
+      const started = await startRecording();
+      if (started) {
+        // Show "listening" state in orb and status indicator
+        setStatus("listening");
+      }
     }
   };
 

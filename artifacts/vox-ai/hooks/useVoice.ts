@@ -25,9 +25,17 @@ const deleteAsync = FS.deleteAsync as (
 
 const getApiBase = () => `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`;
 
-const MAX_RECORDING_MS = 30_000;  // Auto-stop after 30 seconds
+const MAX_RECORDING_MS = 30_000;
 
-export function useVoice() {
+interface UseVoiceOptions {
+  /**
+   * Called when the auto-stop timer fires and transcription completes.
+   * Receive the transcribed text (or null on failure) so callers can send it.
+   */
+  onAutoStop?: (transcribed: string | null) => void;
+}
+
+export function useVoice({ onAutoStop }: UseVoiceOptions = {}) {
   const [isRecording, setIsRecording] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
 
@@ -35,7 +43,10 @@ export function useVoice() {
   const soundRef = useRef<Audio.Sound | null>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Clean up recording timer on unmount
+  // Stable ref so the timer callback always has the latest onAutoStop
+  const onAutoStopRef = useRef(onAutoStop);
+  useEffect(() => { onAutoStopRef.current = onAutoStop; }, [onAutoStop]);
+
   const clearRecordingTimer = () => {
     if (recordingTimerRef.current) {
       clearTimeout(recordingTimerRef.current);
@@ -86,55 +97,6 @@ export function useVoice() {
     };
   }, []);
 
-  const startRecording = async (): Promise<boolean> => {
-    if (Platform.OS === "web") {
-      Alert.alert(
-        "Not Supported on Web",
-        "Voice recording requires the Expo Go app on your Android or iOS device."
-      );
-      return false;
-    }
-
-    try {
-      const { granted } = await Audio.requestPermissionsAsync();
-      if (!granted) {
-        Alert.alert(
-          "Microphone Access Required",
-          "VOX needs microphone access to hear your voice commands. Please enable it in Settings.",
-          [{ text: "OK" }]
-        );
-        return false;
-      }
-
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-      });
-
-      const { recording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
-      recordingRef.current = recording;
-      setIsRecording(true);
-
-      // Keep screen on while mic is active
-      activateKeepAwakeAsync("vox-recording").catch(() => {});
-
-      // Auto-stop after MAX_RECORDING_MS to prevent stuck mic
-      clearRecordingTimer();
-      recordingTimerRef.current = setTimeout(() => {
-        if (recordingRef.current) {
-          stopRecording().catch(() => {});
-        }
-      }, MAX_RECORDING_MS);
-
-      return true;
-    } catch {
-      setIsRecording(false);
-      return false;
-    }
-  };
-
   const stopRecording = async (): Promise<string | null> => {
     clearRecordingTimer();
     deactivateKeepAwake("vox-recording");
@@ -175,12 +137,64 @@ export function useVoice() {
     }
   };
 
+  const startRecording = async (): Promise<boolean> => {
+    if (Platform.OS === "web") {
+      Alert.alert(
+        "Not Supported on Web",
+        "Voice recording requires the Expo Go app on your Android or iOS device."
+      );
+      return false;
+    }
+
+    try {
+      const { granted } = await Audio.requestPermissionsAsync();
+      if (!granted) {
+        Alert.alert(
+          "Microphone Access Required",
+          "VOX needs microphone access to hear your voice commands. Please enable it in Settings.",
+          [{ text: "OK" }]
+        );
+        return false;
+      }
+
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+      });
+
+      const { recording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      );
+      recordingRef.current = recording;
+      setIsRecording(true);
+
+      activateKeepAwakeAsync("vox-recording").catch(() => {});
+
+      // Auto-stop after MAX_RECORDING_MS to prevent stuck mic.
+      // Transcription result is forwarded to onAutoStop so the caller can send it.
+      clearRecordingTimer();
+      recordingTimerRef.current = setTimeout(async () => {
+        if (recordingRef.current) {
+          const text = await stopRecording();
+          onAutoStopRef.current?.(text);
+        }
+      }, MAX_RECORDING_MS);
+
+      return true;
+    } catch {
+      setIsRecording(false);
+      return false;
+    }
+  };
+
   const speak = async (
     text: string,
     voice = "alloy",
     attempt = 1
   ): Promise<void> => {
     if (Platform.OS === "web") return;
+
+    let tempUri: string | null = null;
 
     try {
       setIsSpeaking(true);
@@ -197,24 +211,18 @@ export function useVoice() {
       });
 
       if (!res.ok) {
-        // Retry once on server error
         if (attempt === 1) {
           await new Promise((r) => setTimeout(r, 1000));
           return speak(text, voice, 2);
         }
-        setIsSpeaking(false);
         return;
       }
 
       // Abort if app went to background while waiting for TTS
-      if (AppState.currentState !== "active") {
-        setIsSpeaking(false);
-        return;
-      }
+      if (AppState.currentState !== "active") return;
 
       const { audio, format } = await res.json();
-      const tempUri =
-        (documentDirectory ?? "") + `tts_${Date.now()}.${format}`;
+      tempUri = (documentDirectory ?? "") + `tts_${Date.now()}.${format}`;
 
       await writeAsStringAsync(tempUri, audio, {
         encoding: EncodingType.Base64,
@@ -238,11 +246,14 @@ export function useVoice() {
 
       await sound.unloadAsync().catch(() => {});
       soundRef.current = null;
-      await deleteAsync(tempUri, { idempotent: true }).catch(() => {});
     } catch {
       // TTS failure is non-fatal — text is still visible in chat
     } finally {
       setIsSpeaking(false);
+      // Always clean up temp file regardless of success or failure
+      if (tempUri) {
+        deleteAsync(tempUri, { idempotent: true }).catch(() => {});
+      }
     }
   };
 
