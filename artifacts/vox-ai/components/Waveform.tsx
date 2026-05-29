@@ -23,7 +23,6 @@ const WaveformBar = memo(function WaveformBar({ index, isActive, color }: Wavefo
   const h = useSharedValue(4);
 
   useEffect(() => {
-    // Always cancel the previous animation before starting a new one
     cancelAnimation(h);
 
     if (!isActive) {
@@ -31,30 +30,36 @@ const WaveformBar = memo(function WaveformBar({ index, isActive, color }: Wavefo
       return;
     }
 
-    // Deterministic wave pattern based on bar index
-    const mid = NUM_BARS / 2;
+    // Deterministic wave pattern — taller at center, gentle falloff to edges
+    const mid  = NUM_BARS / 2;
     const dist = Math.abs(index - mid);
-    const maxH = 42 - dist * 2.2;
-    const dur = 220 + index * 18;
+    const maxH = 52 - dist * 2.5;  // Center bars reach 52px, edges ~32px
+    const dur  = 200 + index * 17;
 
     h.value = withRepeat(
       withSequence(
-        withTiming(maxH, { duration: dur, easing: Easing.inOut(Easing.ease) }),
-        withTiming(6, { duration: dur, easing: Easing.inOut(Easing.ease) })
+        withTiming(maxH, { duration: dur,       easing: Easing.inOut(Easing.ease) }),
+        withTiming(5,    { duration: dur * 0.9,  easing: Easing.inOut(Easing.ease) })
       ),
       -1,
       false
     );
 
-    // Cancel on unmount or next effect run
-    return () => {
-      cancelAnimation(h);
-    };
+    return () => { cancelAnimation(h); };
   }, [isActive, index]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const style = useAnimatedStyle(() => ({ height: h.value }));
 
-  return <Animated.View style={[styles.bar, { backgroundColor: color }, style]} />;
+  // Center bars appear brighter — subtle opacity falloff toward edges
+  const mid     = NUM_BARS / 2;
+  const dist    = Math.abs(index - mid);
+  const opacity = 1 - (dist / mid) * 0.38;
+
+  return (
+    <Animated.View
+      style={[styles.bar, { backgroundColor: color, opacity }, style]}
+    />
+  );
 });
 
 interface WaveformProps {
@@ -63,7 +68,7 @@ interface WaveformProps {
 
 export const Waveform = memo(function Waveform({ isActive }: WaveformProps) {
   const colors = useColors();
-  const color = isActive ? colors.accent : colors.primary;
+  const color  = isActive ? colors.accent : colors.primary;
 
   return (
     <View style={styles.container}>
@@ -80,7 +85,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 3,
-    height: 56,
+    height: 64,
     paddingHorizontal: 20,
   },
   bar: {

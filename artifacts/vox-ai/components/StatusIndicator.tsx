@@ -2,6 +2,7 @@ import React, { memo, useEffect } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import Animated, {
   cancelAnimation,
+  Easing,
   useAnimatedStyle,
   useSharedValue,
   withRepeat,
@@ -33,17 +34,19 @@ interface StatusIndicatorProps {
 
 export const StatusIndicator = memo(function StatusIndicator({ status, compact }: StatusIndicatorProps) {
   const dotOpacity = useSharedValue(1);
-  const color = STATUS_COLOR[status];
-  const isActive = status !== "idle";
+  const scanX      = useSharedValue(-60);
+  const color      = STATUS_COLOR[status];
+  const isActive   = status !== "idle";
 
   useEffect(() => {
     cancelAnimation(dotOpacity);
+    cancelAnimation(scanX);
 
     if (isActive) {
       dotOpacity.value = withRepeat(
         withSequence(
           withTiming(0.15, { duration: 450 }),
-          withTiming(1, { duration: 450 })
+          withTiming(1,    { duration: 450 })
         ),
         -1,
         false
@@ -52,16 +55,41 @@ export const StatusIndicator = memo(function StatusIndicator({ status, compact }
       dotOpacity.value = withTiming(1, { duration: 300 });
     }
 
-    // Cancel on unmount or before next effect run
-    return () => cancelAnimation(dotOpacity);
+    // Scanning line — sweeps left→right during "thinking" only
+    if (status === "thinking") {
+      scanX.value = -60;
+      scanX.value = withRepeat(
+        withTiming(140, { duration: 1100, easing: Easing.inOut(Easing.ease) }),
+        -1,
+        false
+      );
+    } else {
+      scanX.value = withTiming(-60, { duration: 200 });
+    }
+
+    return () => {
+      cancelAnimation(dotOpacity);
+      cancelAnimation(scanX);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status]);
 
-  const dotStyle = useAnimatedStyle(() => ({ opacity: dotOpacity.value }));
+  const dotStyle  = useAnimatedStyle(() => ({ opacity: dotOpacity.value }));
+  const scanStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: scanX.value }],
+  }));
 
   if (compact) {
     return (
-      <View style={styles.compactContainer}>
+      <View style={[styles.compactContainer, { borderColor: color + "55" }]}>
+        {/* Sweeping scan line — visible during "thinking" */}
+        <Animated.View
+          style={[
+            styles.scanLine,
+            { backgroundColor: color },
+            scanStyle,
+          ]}
+        />
         <Animated.View style={[styles.dot, { backgroundColor: color }, dotStyle]} />
         <Text style={[styles.compactText, { color }]}>{STATUS_LABEL[status]}</Text>
       </View>
@@ -91,9 +119,17 @@ const styles = StyleSheet.create({
     backgroundColor: "#010A14",
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: "#002233",
     paddingHorizontal: 10,
     paddingVertical: 4,
+    overflow: "hidden",
+  },
+  scanLine: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 2,
+    opacity: 0.75,
   },
   dot: {
     width: 6,

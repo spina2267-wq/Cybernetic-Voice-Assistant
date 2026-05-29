@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Animated as RNAnimated,
   FlatList,
@@ -72,6 +72,39 @@ export default function ChatScreen() {
 
   // Keep the ref current on every render so handleAutoStop always calls the latest version
   sendMessageRef.current = sendMessage;
+
+  // Orb glow — breathes and reacts to assistant status
+  const orbGlowOpacity = useRef(new RNAnimated.Value(0.04)).current;
+  const orbGlowLoopRef = useRef<RNAnimated.CompositeAnimation | null>(null);
+
+  useEffect(() => {
+    if (orbGlowLoopRef.current) orbGlowLoopRef.current.stop();
+
+    const cfg: Record<string, { lo: number; hi: number; dur: number }> = {
+      idle:      { lo: 0.03, hi: 0.07,  dur: 3200 },
+      listening: { lo: 0.07, hi: 0.16,  dur: 700  },
+      thinking:  { lo: 0.05, hi: 0.12,  dur: 1100 },
+      speaking:  { lo: 0.06, hi: 0.13,  dur: 900  },
+      error:     { lo: 0.04, hi: 0.09,  dur: 500  },
+    };
+    const { lo, hi, dur } = cfg[status] ?? cfg.idle;
+
+    orbGlowLoopRef.current = RNAnimated.loop(
+      RNAnimated.sequence([
+        RNAnimated.timing(orbGlowOpacity, { toValue: hi, duration: dur,       useNativeDriver: USE_NATIVE_DRIVER }),
+        RNAnimated.timing(orbGlowOpacity, { toValue: lo, duration: dur * 1.1, useNativeDriver: USE_NATIVE_DRIVER }),
+      ])
+    );
+    orbGlowLoopRef.current.start();
+
+    return () => { orbGlowLoopRef.current?.stop(); };
+  }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Orb glow color matches status (not animated — instant on status change)
+  const orbGlowColor =
+    status === "listening" ? "#00FFCC" :
+    status === "thinking"  ? "#0099FF" :
+    status === "error"     ? "#FF2D55" : "#00D4FF";
 
   // Session recovery banner (shows briefly on resume from background)
   const [showResumeBanner, setShowResumeBanner] = useState(false);
@@ -235,8 +268,10 @@ export default function ChatScreen() {
       >
         {isEmpty ? (
           <View style={styles.emptyContainer}>
-            {/* Ambient glow behind orb */}
-            <View style={styles.orbGlow} />
+            {/* Ambient glow behind orb — breathes and reacts to status */}
+            <RNAnimated.View
+              style={[styles.orbGlow, { opacity: orbGlowOpacity, backgroundColor: orbGlowColor }]}
+            />
             <VoxOrb status={status} size={110} />
             <Text style={styles.welcomeTitle}>How can I help you?</Text>
             <Text style={styles.welcomeSub}>Speak or type to begin</Text>
@@ -272,7 +307,18 @@ export default function ChatScreen() {
 
         {/* Input bar */}
         <View style={[styles.inputArea, { paddingBottom: botPad + 10 }]}>
-          <View style={styles.inputCard}>
+          <View
+            style={[
+              styles.inputCard,
+              {
+                borderColor: isRecording
+                  ? "#00FFCC66"
+                  : isSending
+                  ? "#0099FF44"
+                  : "#003366",
+              },
+            ]}
+          >
             {/* Mic button */}
             <Pressable
               onPress={handleMic}
@@ -436,11 +482,9 @@ const styles = StyleSheet.create({
   },
   orbGlow: {
     position: "absolute",
-    width: 280,
-    height: 280,
-    borderRadius: 140,
-    backgroundColor: "#00D4FF",
-    opacity: 0.04,
+    width: 300,
+    height: 300,
+    borderRadius: 150,
   },
   welcomeTitle: {
     fontSize: 20,
