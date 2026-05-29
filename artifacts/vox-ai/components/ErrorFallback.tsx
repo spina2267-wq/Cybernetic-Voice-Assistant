@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { reloadAppAsync } from "expo";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Modal,
   Platform,
@@ -12,13 +12,13 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
+  cancelAnimation,
   useAnimatedStyle,
   useSharedValue,
   withRepeat,
   withSequence,
   withTiming,
 } from "react-native-reanimated";
-import { useEffect } from "react";
 
 export type ErrorFallbackProps = {
   error: Error;
@@ -33,6 +33,8 @@ function BlinkingDot() {
       -1,
       false
     );
+    return () => cancelAnimation(opacity);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const style = useAnimatedStyle(() => ({ opacity: opacity.value }));
   return <Animated.View style={[styles.dot, style]} />;

@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   Alert,
   Platform,
@@ -14,13 +14,13 @@ import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import Animated, {
+  cancelAnimation,
   useSharedValue,
   useAnimatedStyle,
   withTiming,
   withRepeat,
   withSequence,
 } from "react-native-reanimated";
-import { useEffect } from "react";
 
 import { useAssistant } from "@/context/AssistantContext";
 import { useColors } from "@/hooks/useColors";
@@ -42,6 +42,7 @@ function PingDot({ state }: { state: PingState }) {
   const opacity = useSharedValue(1);
 
   useEffect(() => {
+    cancelAnimation(opacity);
     if (state === "checking") {
       opacity.value = withRepeat(
         withSequence(withTiming(0.2, { duration: 400 }), withTiming(1, { duration: 400 })),
@@ -51,6 +52,8 @@ function PingDot({ state }: { state: PingState }) {
     } else {
       opacity.value = withTiming(1, { duration: 200 });
     }
+    return () => cancelAnimation(opacity);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);
 
   const style = useAnimatedStyle(() => ({ opacity: opacity.value }));

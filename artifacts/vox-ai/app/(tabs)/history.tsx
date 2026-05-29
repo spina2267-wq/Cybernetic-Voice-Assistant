@@ -119,6 +119,10 @@ export default function HistoryScreen() {
           renderItem={({ item }) => <MessageItem message={item} />}
           contentContainerStyle={{ paddingBottom: botPad + 16 }}
           showsVerticalScrollIndicator={false}
+          removeClippedSubviews={Platform.OS !== "web"}
+          maxToRenderPerBatch={10}
+          windowSize={8}
+          initialNumToRender={15}
         />
       )}
     </View>
