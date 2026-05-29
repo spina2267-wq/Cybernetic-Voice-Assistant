@@ -86,6 +86,10 @@ export function useVoice(options: UseVoiceOptions = {}) {
   const recordingRef = useRef<Audio.Recording | null>(null);
   const soundRef = useRef<Audio.Sound | null>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Generation counter: incremented on each speak() call.
+  // Lets an in-progress speak() detect it was superseded and bail out early,
+  // preventing two concurrent TTS sessions fighting over soundRef / audio focus.
+  const speakGenRef = useRef(0);
 
   // Stable ref for onAutoStop — prevents stale closure in the timer
   const onAutoStopRef = useRef(options.onAutoStop);
@@ -256,6 +260,10 @@ export function useVoice(options: UseVoiceOptions = {}) {
   const speak = async (text: string, voice = "alloy"): Promise<void> => {
     if (Platform.OS === "web") return;
 
+    // Increment generation so any previously-running speak() can detect
+    // it has been superseded and exit cleanly without touching the new state.
+    const myGen = ++speakGenRef.current;
+
     // tempUri declared outside try so `finally` can always clean it up,
     // even if an exception is thrown after the file is written.
     let tempUri: string | null = null;
@@ -263,11 +271,17 @@ export function useVoice(options: UseVoiceOptions = {}) {
     try {
       setIsSpeaking(true);
 
-      // Stop any previous TTS that's still playing
+      // Stop any previous TTS that's still playing.
+      // stopAsync() before unloadAsync() avoids Android audio glitches when
+      // cutting off mid-playback (unload without stop can cause buffer errors).
       if (soundRef.current) {
+        await soundRef.current.stopAsync().catch(() => {});
         await soundRef.current.unloadAsync().catch(() => {});
         soundRef.current = null;
       }
+
+      // Bail out if a newer speak() call already superseded this one
+      if (myGen !== speakGenRef.current) return;
 
       const body = JSON.stringify({ text: text.slice(0, 4096), voice });
       const doFetch = () =>
@@ -286,16 +300,17 @@ export function useVoice(options: UseVoiceOptions = {}) {
         if (!res.ok) return; // Both attempts failed — finally handles cleanup
       }
 
-      // First foreground check: user may have minimized while waiting for TTS network response
-      if (AppState.currentState !== "active") return;
+      // Foreground + generation check: user may have minimized while waiting for TTS network response,
+      // or a newer speak() call arrived while we were awaiting the network.
+      if (AppState.currentState !== "active" || myGen !== speakGenRef.current) return;
 
       const { audio, format } = (await res.json()) as { audio: string; format: string };
       tempUri = `${documentDirectory ?? ""}tts_${Date.now()}.${format}`;
 
       await writeAsStringAsync(tempUri, audio, { encoding: EncodingType.Base64 });
 
-      // Second foreground check: user may have minimized during file write
-      if (AppState.currentState !== "active") return;
+      // Check again after file write (file I/O can take a moment on slower devices)
+      if (AppState.currentState !== "active" || myGen !== speakGenRef.current) return;
 
       // Request audio focus for playback (ducks other apps' audio on Android)
       await Audio.setAudioModeAsync(PLAYBACK_MODE);
@@ -312,6 +327,9 @@ export function useVoice(options: UseVoiceOptions = {}) {
         sound.playAsync().catch(() => resolve());
       });
 
+      // stopAsync() before unloadAsync() prevents Android buffer-underrun clicks
+      // when the sound finishes naturally (didJustFinish path).
+      await sound.stopAsync().catch(() => {});
       await sound.unloadAsync().catch(() => {});
       soundRef.current = null;
 

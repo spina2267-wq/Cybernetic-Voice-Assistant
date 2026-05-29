@@ -36,18 +36,19 @@ export default function ChatScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const { messages, status, setStatus } = useAssistant();
-  const { sendMessage } = useAIStream();
 
   const [inputText, setInputText] = useState("");
   const [showStartup, setShowStartup] = useState(true);
   const [isSending, setIsSending] = useState(false);
   const inputRef = useRef<TextInput>(null);
 
-  // Stable ref to sendMessage — avoids stale closure in voice callbacks
-  const sendMessageRef = useRef(sendMessage);
-  sendMessageRef.current = sendMessage;
+  // Stable ref for sendMessage — lets handleAutoStop call the latest sendMessage
+  // without being a dep (which would cause infinite re-creation on streaming tokens).
+  // Initialized as a no-op; updated below after useAIStream is called.
+  const sendMessageRef = useRef<(text: string) => Promise<void>>(async () => {});
 
-  // Called by useVoice when the 30s auto-stop timer fires
+  // Called by useVoice when the 30s auto-stop timer fires.
+  // Reads sendMessageRef.current so it never goes stale.
   const handleAutoStop = useCallback(async (text: string | null) => {
     setStatus("idle");
     if (!text) return;
@@ -59,9 +60,18 @@ export default function ChatScreen() {
     }
   }, [setStatus]);
 
-  const { isRecording, startRecording, stopRecording } = useVoice({
+  // Single useVoice instance — owns ALL audio state (recording + TTS playback).
+  // speak is passed to useAIStream so TTS uses the same soundRef and isSpeaking
+  // state, preventing orphaned AppState listeners and split audio focus.
+  // Must be called BEFORE useAIStream so speak is defined when passed as arg.
+  const { isRecording, startRecording, stopRecording, speak } = useVoice({
     onAutoStop: handleAutoStop,
   });
+
+  const { sendMessage } = useAIStream(speak);
+
+  // Keep the ref current on every render so handleAutoStop always calls the latest version
+  sendMessageRef.current = sendMessage;
 
   // Session recovery banner (shows briefly on resume from background)
   const [showResumeBanner, setShowResumeBanner] = useState(false);

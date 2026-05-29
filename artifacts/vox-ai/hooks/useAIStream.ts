@@ -1,6 +1,5 @@
 import { fetch as expoFetch } from "expo/fetch";
 import { useAssistant } from "@/context/AssistantContext";
-import { useVoice } from "@/hooks/useVoice";
 import { isAppActive } from "@/hooks/useAppLifecycle";
 import { useCallback, useRef } from "react";
 
@@ -41,7 +40,12 @@ function toJarvisError(raw: string): string {
   return raw.length > 120 ? "System error. Unable to process request." : raw;
 }
 
-export function useAIStream() {
+/**
+ * speakFn is provided by the caller (from a single shared useVoice instance).
+ * This avoids a second useVoice instantiation which would create orphaned
+ * AppState listeners, split soundRef state, and a disconnected isSpeaking flag.
+ */
+export function useAIStream(speakFn?: (text: string, voice: string) => Promise<void>) {
   const {
     messages,
     addMessage,
@@ -51,7 +55,6 @@ export function useAIStream() {
     ttsEnabled,
     selectedVoice,
   } = useAssistant();
-  const { speak } = useVoice();
 
   // Keep a ref to messages so sendMessage doesn't need it as a dep.
   // Without this, sendMessage would be recreated on every streaming token
@@ -161,9 +164,9 @@ export function useAIStream() {
         commitLastAssistantMessage(fullContent);
 
         // Speak if TTS enabled and app is still in foreground
-        if (ttsEnabled && isAppActive()) {
+        if (ttsEnabled && isAppActive() && speakFn) {
           setStatus("speaking");
-          await speak(fullContent, selectedVoice);
+          await speakFn(fullContent, selectedVoice);
         }
 
         setStatus("idle");
@@ -177,7 +180,7 @@ export function useAIStream() {
     // Intentionally omit 'messages' — use messagesRef.current instead
     // to prevent sendMessage from being recreated on every streaming token.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [addMessage, updateLastAssistantMessage, commitLastAssistantMessage, setStatus, ttsEnabled, selectedVoice, speak]
+    [addMessage, updateLastAssistantMessage, commitLastAssistantMessage, setStatus, ttsEnabled, selectedVoice, speakFn]
   );
 
   return { sendMessage };
