@@ -86,10 +86,18 @@ export function useVoice(options: UseVoiceOptions = {}) {
   const recordingRef = useRef<Audio.Recording | null>(null);
   const soundRef = useRef<Audio.Sound | null>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Generation counter: incremented on each speak() call.
+
+  // Generation counter: incremented on each speak() call AND whenever external
+  // code stops TTS (stopSpeaking, startRecording, background handler).
   // Lets an in-progress speak() detect it was superseded and bail out early,
   // preventing two concurrent TTS sessions fighting over soundRef / audio focus.
   const speakGenRef = useRef(0);
+
+  // Re-entrant guard for startRecording: covers the async window between the
+  // recordingRef.current === null check and recordingRef.current = recording
+  // assignment (~200-500ms of Audio.Recording.createAsync). Without this, a
+  // rapid double-tap creates two concurrent recordings — one orphaned.
+  const isStartingRef = useRef(false);
 
   // Stable ref for onAutoStop — prevents stale closure in the timer
   const onAutoStopRef = useRef(options.onAutoStop);
@@ -110,6 +118,11 @@ export function useVoice(options: UseVoiceOptions = {}) {
       if (nextState === "background" || nextState === "inactive") {
         clearRecordingTimer();
         keepAwakeDeactivate();
+
+        // Signal any in-progress speak() to bail before we destroy its resources.
+        // Without this, speak() continues running after soundRef is nulled and
+        // tries to call stopAsync/unloadAsync on the already-destroyed Sound object.
+        speakGenRef.current++;
 
         if (recordingRef.current) {
           try { await recordingRef.current.stopAndUnloadAsync(); } catch {}
@@ -179,6 +192,9 @@ export function useVoice(options: UseVoiceOptions = {}) {
     } catch {
       setIsRecording(false);
       recordingRef.current = null;
+      // Release audio focus even on error — without this, if readAsStringAsync
+      // throws, the audio mode stays stuck in RECORDING_MODE indefinitely.
+      try { await Audio.setAudioModeAsync(IDLE_MODE); } catch {}
       return null;
     }
   };
@@ -192,9 +208,15 @@ export function useVoice(options: UseVoiceOptions = {}) {
       return false;
     }
 
-    // Guard: don't start a second recording if one is already in progress.
-    // Prevents orphaned recordings from rapid double-taps.
+    // Guard: don't start if a recording is already active.
     if (recordingRef.current) return false;
+
+    // Guard: don't start if we're already in the async setup phase.
+    // Covers the ~200-500ms window between the recordingRef check above and
+    // recordingRef.current = recording below — a rapid second tap would pass
+    // the recordingRef check and launch a second concurrent createAsync().
+    if (isStartingRef.current) return false;
+    isStartingRef.current = true;
 
     try {
       const { granted, canAskAgain } = await Audio.requestPermissionsAsync();
@@ -211,6 +233,19 @@ export function useVoice(options: UseVoiceOptions = {}) {
 
       // Guard: don't start if app went to background while permission dialog was open
       if (AppState.currentState !== "active") return false;
+
+      // Stop any active TTS before switching to RECORDING_MODE.
+      // Switching audio mode while a Sound is playing causes Android audio routing
+      // glitches (speaker→earpiece swap) and can corrupt the recording with
+      // mixed TTS audio. Increment speakGenRef so the in-progress speak() bails
+      // cleanly rather than operating on the sound we're about to destroy.
+      if (soundRef.current) {
+        speakGenRef.current++;
+        await soundRef.current.stopAsync().catch(() => {});
+        await soundRef.current.unloadAsync().catch(() => {});
+        soundRef.current = null;
+        setIsSpeaking(false);
+      }
 
       await Audio.setAudioModeAsync(RECORDING_MODE);
 
@@ -247,6 +282,10 @@ export function useVoice(options: UseVoiceOptions = {}) {
       setIsRecording(false);
       recordingRef.current = null;
       return false;
+    } finally {
+      // Always release the re-entrant guard, even if an exception or early
+      // return skips the success path.
+      isStartingRef.current = false;
     }
   };
 
@@ -338,7 +377,13 @@ export function useVoice(options: UseVoiceOptions = {}) {
     } catch {
       // TTS failure is non-fatal — text is still visible in chat
     } finally {
-      setIsSpeaking(false);
+      // Only reset isSpeaking if this generation is still the current one.
+      // If a newer speak() call (or stopSpeaking/startRecording) has already
+      // taken ownership of the isSpeaking flag, leave it alone — resetting
+      // it here would briefly flicker the UI to "not speaking" mid-playback.
+      if (myGen === speakGenRef.current) {
+        setIsSpeaking(false);
+      }
       // Always clean up the temp audio file — even on early return or exception
       if (tempUri) {
         await deleteAsync(tempUri, { idempotent: true }).catch(() => {});
@@ -347,6 +392,10 @@ export function useVoice(options: UseVoiceOptions = {}) {
   };
 
   const stopSpeaking = async () => {
+    // Increment generation before touching the sound, so any in-progress speak()
+    // detects it's been superseded and exits without operating on our resources.
+    speakGenRef.current++;
+
     if (soundRef.current) {
       await soundRef.current.stopAsync().catch(() => {});
       await soundRef.current.unloadAsync().catch(() => {});

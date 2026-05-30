@@ -62,9 +62,33 @@ export function useAIStream(speakFn?: (text: string, voice: string) => Promise<v
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
 
+  // Tracks the pending "reset to idle after error" timer.
+  // Must be cancelled when a new message is sent — otherwise the timer fires
+  // mid-thinking and flips status to "idle" during an active request, causing
+  // the orb and status indicator to flicker from thinking→idle→thinking.
+  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const scheduleErrorRecovery = (ms: number) => {
+    if (errorTimerRef.current) {
+      clearTimeout(errorTimerRef.current);
+    }
+    errorTimerRef.current = setTimeout(() => {
+      errorTimerRef.current = null;
+      setStatus("idle");
+    }, ms);
+  };
+
   const sendMessage = useCallback(
     async (content: string) => {
       if (!content.trim()) return;
+
+      // Cancel any pending error-recovery timer from a previous failed request.
+      // Without this, a 3-second timer set on the last error fires mid-thinking
+      // and resets status to idle while we're actively processing a new message.
+      if (errorTimerRef.current) {
+        clearTimeout(errorTimerRef.current);
+        errorTimerRef.current = null;
+      }
 
       // Snapshot history before adding new messages (newest-first → reverse for API)
       const history = [...messagesRef.current]
@@ -113,7 +137,7 @@ export function useAIStream(speakFn?: (text: string, voice: string) => Promise<v
           const errMsg = toJarvisError(raw);
           commitLastAssistantMessage(errMsg);
           setStatus("error");
-          setTimeout(() => setStatus("idle"), 3000);
+          scheduleErrorRecovery(3000);
           return;
         }
 
@@ -174,7 +198,7 @@ export function useAIStream(speakFn?: (text: string, voice: string) => Promise<v
         const raw = err instanceof Error ? err.message : "Unknown error";
         commitLastAssistantMessage(toJarvisError(raw));
         setStatus("error");
-        setTimeout(() => setStatus("idle"), 3000);
+        scheduleErrorRecovery(3000);
       }
     },
     // Intentionally omit 'messages' — use messagesRef.current instead
