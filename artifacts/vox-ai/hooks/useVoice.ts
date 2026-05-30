@@ -37,7 +37,18 @@ const deleteAsync = FS.deleteAsync as (
 
 const getApiBase = () => `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`;
 
+// ─── Timing constants ────────────────────────────────────────────────────────
 const MAX_RECORDING_MS = 30_000;
+
+// STT: audio upload + Whisper transcription. 30s recordings are ~0.5 MB;
+// typical transcription is 2-4s on a good connection, 10-12s on 3G.
+// 15s gives a wide safety margin without leaving the user stuck forever.
+const STT_TIMEOUT_MS = 15_000;
+
+// TTS: server-side text-to-speech generation. Scales with response length.
+// Typical single-sentence: 1-3s. Long paragraph: 5-8s. 20s is the ceiling.
+// Both fetch attempts (initial + retry) share this same timeout window.
+const TTS_TIMEOUT_MS = 20_000;
 
 // Shared Android + iOS audio mode for playback (TTS).
 // shouldDuckAndroid: lower other apps' volume while we speak (polite).
@@ -73,7 +84,7 @@ const IDLE_MODE = {
 export interface UseVoiceOptions {
   /**
    * Called when the 30-second auto-stop timer fires.
-   * Receives the transcribed text (or null if transcription failed).
+   * Receives the transcribed text (or null if transcription failed / timed out).
    * Use this to send the message automatically.
    */
   onAutoStop?: (text: string | null) => void;
@@ -99,6 +110,15 @@ export function useVoice(options: UseVoiceOptions = {}) {
   // rapid double-tap creates two concurrent recordings — one orphaned.
   const isStartingRef = useRef(false);
 
+  // AbortController for the in-flight STT transcription fetch.
+  // Aborted on: STT_TIMEOUT_MS elapsed, app goes to background, unmount.
+  const sttAbortRef = useRef<AbortController | null>(null);
+
+  // AbortController for the in-flight TTS generation fetch.
+  // Aborted on: TTS_TIMEOUT_MS elapsed, new speak() call, stopSpeaking(),
+  // startRecording() (mic tap during TTS), app goes to background, unmount.
+  const speakAbortRef = useRef<AbortController | null>(null);
+
   // Stable ref for onAutoStop — prevents stale closure in the timer
   const onAutoStopRef = useRef(options.onAutoStop);
   useEffect(() => { onAutoStopRef.current = options.onAutoStop; }, [options.onAutoStop]);
@@ -119,9 +139,15 @@ export function useVoice(options: UseVoiceOptions = {}) {
         clearRecordingTimer();
         keepAwakeDeactivate();
 
+        // Abort any in-flight network requests BEFORE destroying resources.
+        // This lets speak() / stopRecording() detect cancellation via AbortError
+        // and exit cleanly, rather than continuing to operate on freed objects.
+        sttAbortRef.current?.abort();
+        sttAbortRef.current = null;
+        speakAbortRef.current?.abort();
+        speakAbortRef.current = null;
+
         // Signal any in-progress speak() to bail before we destroy its resources.
-        // Without this, speak() continues running after soundRef is nulled and
-        // tries to call stopAsync/unloadAsync on the already-destroyed Sound object.
         speakGenRef.current++;
 
         if (recordingRef.current) {
@@ -153,6 +179,9 @@ export function useVoice(options: UseVoiceOptions = {}) {
     return () => {
       clearRecordingTimer();
       keepAwakeDeactivate();
+      // Cancel in-flight requests so their callbacks don't fire on a dead component
+      sttAbortRef.current?.abort();
+      speakAbortRef.current?.abort();
       recordingRef.current?.stopAndUnloadAsync().catch(() => {});
       soundRef.current?.unloadAsync().catch(() => {});
     };
@@ -161,6 +190,14 @@ export function useVoice(options: UseVoiceOptions = {}) {
   const stopRecording = async (): Promise<string | null> => {
     clearRecordingTimer();
     keepAwakeDeactivate();
+
+    // Cancel any previously pending STT request (edge-case re-entry guard).
+    if (sttAbortRef.current) {
+      sttAbortRef.current.abort();
+    }
+    const sttController = new AbortController();
+    sttAbortRef.current = sttController;
+    let sttTimer: ReturnType<typeof setTimeout> | null = null;
 
     try {
       if (!recordingRef.current) return null;
@@ -180,22 +217,35 @@ export function useVoice(options: UseVoiceOptions = {}) {
       });
       const ext = uri.split(".").pop() ?? "m4a";
 
+      // Start the STT timeout only after the file is read — we don't want to
+      // penalize slow local file I/O against the network budget.
+      sttTimer = setTimeout(() => sttController.abort(), STT_TIMEOUT_MS);
+
       const res = await fetch(`${getApiBase()}/vox/transcribe`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ audio: base64, format: ext }),
+        signal: sttController.signal,
       });
 
       if (!res.ok) return null;
       const data = await res.json();
       return (data.text as string) || null;
     } catch {
+      // Covers: AbortError (timeout / background), network errors, file read errors.
+      // All are non-fatal — UI shows idle state, user can try again.
       setIsRecording(false);
       recordingRef.current = null;
-      // Release audio focus even on error — without this, if readAsStringAsync
-      // throws, the audio mode stays stuck in RECORDING_MODE indefinitely.
+      // Ensure audio focus is released even when an error interrupts the flow
       try { await Audio.setAudioModeAsync(IDLE_MODE); } catch {}
       return null;
+    } finally {
+      if (sttTimer) clearTimeout(sttTimer);
+      // Only null the ref if it still points to our controller; a concurrent
+      // call (e.g. background handler) may have already replaced it.
+      if (sttAbortRef.current === sttController) {
+        sttAbortRef.current = null;
+      }
     }
   };
 
@@ -237,10 +287,11 @@ export function useVoice(options: UseVoiceOptions = {}) {
       // Stop any active TTS before switching to RECORDING_MODE.
       // Switching audio mode while a Sound is playing causes Android audio routing
       // glitches (speaker→earpiece swap) and can corrupt the recording with
-      // mixed TTS audio. Increment speakGenRef so the in-progress speak() bails
-      // cleanly rather than operating on the sound we're about to destroy.
+      // mixed TTS audio. Abort the in-flight TTS fetch so speak() exits cleanly.
       if (soundRef.current) {
         speakGenRef.current++;
+        speakAbortRef.current?.abort();
+        speakAbortRef.current = null;
         await soundRef.current.stopAsync().catch(() => {});
         await soundRef.current.unloadAsync().catch(() => {});
         soundRef.current = null;
@@ -291,7 +342,9 @@ export function useVoice(options: UseVoiceOptions = {}) {
 
   /**
    * Plays TTS audio for the given text.
-   * - One automatic retry on HTTP failure (after 1s delay).
+   * - Configurable timeout (TTS_TIMEOUT_MS) via AbortController — no indefinite waits.
+   * - Aborts any previously in-flight TTS fetch when a new speak() starts.
+   * - One automatic retry on HTTP failure (after 1s delay, within same timeout window).
    * - Temp audio file always cleaned up in `finally` — no leaks on early exit.
    * - Aborts if app goes to background before or during playback.
    * - Properly releases Android audio focus when done.
@@ -303,6 +356,17 @@ export function useVoice(options: UseVoiceOptions = {}) {
     // it has been superseded and exit cleanly without touching the new state.
     const myGen = ++speakGenRef.current;
 
+    // Abort any in-flight TTS fetch from the previous speak() call.
+    // This makes the old fetch fail immediately with AbortError rather than
+    // waiting for the full server response before realising it's been superseded.
+    if (speakAbortRef.current) {
+      speakAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    speakAbortRef.current = controller;
+
+    let ttsTimer: ReturnType<typeof setTimeout> | null = null;
+
     // tempUri declared outside try so `finally` can always clean it up,
     // even if an exception is thrown after the file is written.
     let tempUri: string | null = null;
@@ -310,7 +374,12 @@ export function useVoice(options: UseVoiceOptions = {}) {
     try {
       setIsSpeaking(true);
 
-      // Stop any previous TTS that's still playing.
+      // Start timeout: both fetch attempts must complete within TTS_TIMEOUT_MS.
+      // Using a single controller/timer for initial + retry keeps the logic simple
+      // and ensures a slow first attempt doesn't hide a retry that also times out.
+      ttsTimer = setTimeout(() => controller.abort(), TTS_TIMEOUT_MS);
+
+      // Stop any previous TTS sound that's still playing.
       // stopAsync() before unloadAsync() avoids Android audio glitches when
       // cutting off mid-playback (unload without stop can cause buffer errors).
       if (soundRef.current) {
@@ -328,18 +397,21 @@ export function useVoice(options: UseVoiceOptions = {}) {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body,
+          signal: controller.signal,
         });
 
       let res = await doFetch();
 
       if (!res.ok) {
-        // One retry after a short delay
+        // One retry after a short delay (within the same TTS_TIMEOUT_MS window).
         await new Promise((r) => setTimeout(r, 1000));
+        // Fast-exit if superseded or aborted during the retry delay
+        if (myGen !== speakGenRef.current) return;
         res = await doFetch();
         if (!res.ok) return; // Both attempts failed — finally handles cleanup
       }
 
-      // Foreground + generation check: user may have minimized while waiting for TTS network response,
+      // Foreground + generation check: user may have minimized while waiting for TTS,
       // or a newer speak() call arrived while we were awaiting the network.
       if (AppState.currentState !== "active" || myGen !== speakGenRef.current) return;
 
@@ -375,12 +447,19 @@ export function useVoice(options: UseVoiceOptions = {}) {
       // Release audio focus — allow other apps to resume normal volume
       try { await Audio.setAudioModeAsync(IDLE_MODE); } catch {}
     } catch {
-      // TTS failure is non-fatal — text is still visible in chat
+      // Covers: AbortError (timeout, cancelled by new speak() / stopSpeaking() /
+      // background), network errors, file write errors. All non-fatal — the
+      // assistant's response is already visible as text in the chat.
     } finally {
+      if (ttsTimer) clearTimeout(ttsTimer);
+      // Only null the ref if it still points to our controller — a newer speak()
+      // may have already replaced it with its own controller.
+      if (speakAbortRef.current === controller) {
+        speakAbortRef.current = null;
+      }
       // Only reset isSpeaking if this generation is still the current one.
-      // If a newer speak() call (or stopSpeaking/startRecording) has already
-      // taken ownership of the isSpeaking flag, leave it alone — resetting
-      // it here would briefly flicker the UI to "not speaking" mid-playback.
+      // If a newer speak() call has already taken ownership of the flag, leave
+      // it alone — resetting here would flicker the UI to "not speaking".
       if (myGen === speakGenRef.current) {
         setIsSpeaking(false);
       }
@@ -392,9 +471,12 @@ export function useVoice(options: UseVoiceOptions = {}) {
   };
 
   const stopSpeaking = async () => {
-    // Increment generation before touching the sound, so any in-progress speak()
-    // detects it's been superseded and exits without operating on our resources.
+    // Increment generation and abort the in-flight fetch before destroying
+    // the sound — so speak() exits via AbortError rather than trying to
+    // operate on a sound object we're about to unload.
     speakGenRef.current++;
+    speakAbortRef.current?.abort();
+    speakAbortRef.current = null;
 
     if (soundRef.current) {
       await soundRef.current.stopAsync().catch(() => {});
