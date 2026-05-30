@@ -426,6 +426,11 @@ export function useVoice(options: UseVoiceOptions = {}) {
       // Request audio focus for playback (ducks other apps' audio on Android)
       await Audio.setAudioModeAsync(PLAYBACK_MODE);
 
+      // Check after mode switch: stopSpeaking() or startRecording() may have been
+      // called during this await, already setting IDLE_MODE and nulling soundRef.
+      // Without this guard, audio plays even after an explicit stop request.
+      if (AppState.currentState !== "active" || myGen !== speakGenRef.current) return;
+
       const { sound } = await Audio.Sound.createAsync({ uri: tempUri });
       soundRef.current = sound;
 

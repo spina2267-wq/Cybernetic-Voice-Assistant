@@ -1,7 +1,7 @@
 import { fetch as expoFetch } from "expo/fetch";
 import { useAssistant } from "@/context/AssistantContext";
 import { isAppActive } from "@/hooks/useAppLifecycle";
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 function makeId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
@@ -77,6 +77,17 @@ export function useAIStream(speakFn?: (text: string, voice: string) => Promise<v
       setStatus("idle");
     }, ms);
   };
+
+  // Cancel any pending error-recovery timer on unmount so it doesn't fire
+  // on a navigated-away screen and trigger a state update unnecessarily.
+  useEffect(() => {
+    return () => {
+      if (errorTimerRef.current) {
+        clearTimeout(errorTimerRef.current);
+        errorTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const sendMessage = useCallback(
     async (content: string) => {

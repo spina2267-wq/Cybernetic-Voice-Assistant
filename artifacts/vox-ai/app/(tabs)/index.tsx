@@ -50,8 +50,13 @@ export default function ChatScreen() {
   // Called by useVoice when the 30s auto-stop timer fires.
   // Reads sendMessageRef.current so it never goes stale.
   const handleAutoStop = useCallback(async (text: string | null) => {
-    setStatus("idle");
-    if (!text) return;
+    // Only set idle here when transcription failed — if text is present, sendMessage
+    // will set "thinking" immediately, so setting "idle" first causes a visible
+    // one-frame flash: listening→idle→thinking on every successful auto-stop.
+    if (!text) {
+      setStatus("idle");
+      return;
+    }
     setIsSending(true);
     try {
       await sendMessageRef.current(text);
