@@ -39,6 +39,10 @@ const getApiBase = () => `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`;
 
 // ─── Timing constants ────────────────────────────────────────────────────────
 const MAX_RECORDING_MS = 30_000;
+const SILENCE_STOP_MS = 2_000;
+const SILENCE_GRACE_MS = 1_000;
+const METERING_INTERVAL_MS = 250;
+const SILENCE_THRESHOLD_DB = -48;
 
 // STT: audio upload + Whisper transcription. 30s recordings are ~0.5 MB;
 // typical transcription is 2-4s on a good connection, 10-12s on 3G.
@@ -83,7 +87,7 @@ const IDLE_MODE = {
 
 export interface UseVoiceOptions {
   /**
-   * Called when the 30-second auto-stop timer fires.
+   * Called when the 30-second limit or the silence auto-stop fires.
    * Receives the transcribed text (or null if transcription failed / timed out).
    * Use this to send the message automatically.
    */
@@ -97,6 +101,9 @@ export function useVoice(options: UseVoiceOptions = {}) {
   const recordingRef = useRef<Audio.Recording | null>(null);
   const soundRef = useRef<Audio.Sound | null>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const silenceStartedAtRef = useRef<number | null>(null);
+  const hasDetectedSpeechRef = useRef(false);
+  const autoStopInProgressRef = useRef(false);
 
   // Generation counter: incremented on each speak() call AND whenever external
   // code stops TTS (stopSpeaking, startRecording, background handler).
@@ -130,6 +137,11 @@ export function useVoice(options: UseVoiceOptions = {}) {
     }
   };
 
+  const resetSilenceDetection = () => {
+    silenceStartedAtRef.current = null;
+    hasDetectedSpeechRef.current = false;
+  };
+
   // Handle app going to background — release ALL audio resources immediately.
   // This is the Android foreground service compatibility layer: we don't hold
   // audio focus in background, preventing stuck mic or audio ANR issues.
@@ -151,10 +163,13 @@ export function useVoice(options: UseVoiceOptions = {}) {
         speakGenRef.current++;
 
         if (recordingRef.current) {
+          recordingRef.current.setOnRecordingStatusUpdate(null);
           try { await recordingRef.current.stopAndUnloadAsync(); } catch {}
           recordingRef.current = null;
           setIsRecording(false);
         }
+        autoStopInProgressRef.current = false;
+        resetSilenceDetection();
 
         if (soundRef.current) {
           try {
@@ -190,6 +205,7 @@ export function useVoice(options: UseVoiceOptions = {}) {
   const stopRecording = async (): Promise<string | null> => {
     clearRecordingTimer();
     keepAwakeDeactivate();
+    resetSilenceDetection();
 
     // Cancel any previously pending STT request (edge-case re-entry guard).
     if (sttAbortRef.current) {
@@ -203,8 +219,10 @@ export function useVoice(options: UseVoiceOptions = {}) {
       if (!recordingRef.current) return null;
       setIsRecording(false);
 
-      await recordingRef.current.stopAndUnloadAsync();
-      const uri = recordingRef.current.getURI();
+      const recording = recordingRef.current;
+      recording.setOnRecordingStatusUpdate(null);
+      await recording.stopAndUnloadAsync();
+      const uri = recording.getURI();
       recordingRef.current = null;
 
       if (!uri) return null;
@@ -246,6 +264,7 @@ export function useVoice(options: UseVoiceOptions = {}) {
       if (sttAbortRef.current === sttController) {
         sttAbortRef.current = null;
       }
+      autoStopInProgressRef.current = false;
     }
   };
 
@@ -315,6 +334,47 @@ export function useVoice(options: UseVoiceOptions = {}) {
 
       recordingRef.current = recording;
       setIsRecording(true);
+      resetSilenceDetection();
+
+      // Metering is provided by expo-av's existing recording preset. Polling
+      // every 250ms is enough for a stable 2s silence window without a busy
+      // JS loop or any additional native module.
+      recording.setProgressUpdateInterval(METERING_INTERVAL_MS);
+      recording.setOnRecordingStatusUpdate((recordingStatus) => {
+        if (
+          recordingRef.current !== recording ||
+          !recordingStatus.isRecording ||
+          AppState.currentState !== "active" ||
+          autoStopInProgressRef.current
+        ) {
+          return;
+        }
+
+        const metering = recordingStatus.metering;
+        if (
+          typeof metering !== "number" ||
+          recordingStatus.durationMillis < SILENCE_GRACE_MS
+        ) {
+          return;
+        }
+
+        if (metering > SILENCE_THRESHOLD_DB) {
+          hasDetectedSpeechRef.current = true;
+          silenceStartedAtRef.current = null;
+          return;
+        }
+
+        if (!hasDetectedSpeechRef.current) return;
+
+        const now = Date.now();
+        silenceStartedAtRef.current ??= now;
+        if (now - silenceStartedAtRef.current < SILENCE_STOP_MS) return;
+
+        autoStopInProgressRef.current = true;
+        void stopRecording()
+          .then((text) => onAutoStopRef.current?.(text))
+          .catch(() => onAutoStopRef.current?.(null));
+      });
 
       // Keep screen on while mic is active (native only — guarded inside helper)
       keepAwakeActivate();
@@ -323,6 +383,7 @@ export function useVoice(options: UseVoiceOptions = {}) {
       clearRecordingTimer();
       recordingTimerRef.current = setTimeout(async () => {
         if (recordingRef.current) {
+          autoStopInProgressRef.current = true;
           const text = await stopRecording().catch(() => null);
           onAutoStopRef.current?.(text);
         }
@@ -330,6 +391,8 @@ export function useVoice(options: UseVoiceOptions = {}) {
 
       return true;
     } catch {
+      resetSilenceDetection();
+      autoStopInProgressRef.current = false;
       setIsRecording(false);
       recordingRef.current = null;
       return false;
